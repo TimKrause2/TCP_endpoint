@@ -61,7 +61,7 @@ enum {
 	C_STATE_QUIT
 };
 
-#define BURST_BYTES (256*1024*1024)
+#define BURST_BYTES (16*1024*1024)
 
 void timer_cb(union sigval arg){
 	endpoint_t *e = (endpoint_t *)arg.sival_ptr;
