@@ -23,7 +23,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 
-#define N_CHILDREN_MAX 1
+#define N_CHILDREN_MAX 4
 #define LISTEN_BACKLOG 10
 
 struct shm_data
