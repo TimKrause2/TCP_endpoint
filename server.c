@@ -210,7 +210,6 @@ int main( int argc, char *argv[] )
 	struct sigaction sigact;
 
 	sigact.sa_handler = SIG_IGN;
-	sigact.sa_sigaction = NULL;
 	sigemptyset(&sigact.sa_mask);
 	sigact.sa_flags = SA_NOCLDWAIT;
 	sigact.sa_restorer = NULL;
@@ -328,7 +327,7 @@ int main( int argc, char *argv[] )
 		}
 		printf("r:%d\n",r);
 		for(int p=0;p<r;p++){
-			if(revents[p].events|EPOLLIN){
+			if(revents[p].events&EPOLLIN){
 				int cfd = accept_connection(revents[p].data.fd);
 				if(cfd<0){
 					exit(1);

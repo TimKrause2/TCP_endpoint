@@ -58,6 +58,78 @@ void recv_timer_cb(union sigval arg)
 	io_shutdown(e);
 }
 
+void SSL_print_error(char *context)
+{
+	printf("%s:%s\n", context,
+		   ERR_error_string(ERR_get_error(),NULL));
+}
+
+void SSL_perror(char *message, SSL *ssl, int result ){
+	int error = SSL_get_error(ssl, result);
+	char *error_str;
+	switch(error){
+	case SSL_ERROR_NONE:
+		error_str = "SSL_ERROR_NONE";
+		break;
+
+	case SSL_ERROR_ZERO_RETURN:
+		error_str = "SSL_ERROR_ZERO_RETURN";
+		break;
+
+	case SSL_ERROR_WANT_READ:
+		error_str = "SSL_ERROR_WANT_READ";
+		break;
+
+	case SSL_ERROR_WANT_WRITE:
+		error_str = "SSL_ERROR_WANT_WRITE";
+		break;
+
+	case SSL_ERROR_WANT_CONNECT:
+		error_str = "SSL_ERROR_WANT_CONNECT";
+		break;
+
+	case SSL_ERROR_WANT_ACCEPT:
+		error_str = "SSL_ERROR_WANT_ACCEPT";
+		break;
+
+	case SSL_ERROR_WANT_X509_LOOKUP:
+		error_str = "SSL_ERROR_WANT_X509_LOOKUP";
+		break;
+
+	case SSL_ERROR_WANT_ASYNC:
+		error_str = "SSL_ERROR_WANT_ASYNC";
+		break;
+
+	case SSL_ERROR_WANT_ASYNC_JOB:
+		error_str = "SSL_ERROR_WANT_ASYNC_JOB";
+		break;
+
+	case SSL_ERROR_WANT_CLIENT_HELLO_CB:
+		error_str = "SSL_ERROR_WANT_CLIENT_HELLO_CB";
+		break;
+
+	case SSL_ERROR_SYSCALL:
+		error_str = "SSL_ERROR_SYSCALL";
+		break;
+
+	case SSL_ERROR_SSL:
+		error_str = "SSL_ERROR_SSL";
+		break;
+
+	default:
+		error_str = "Unknown Error";
+		break;
+	}
+
+	printf("Error in %s:%s\n",message,error_str);
+
+	if(error == SSL_ERROR_SYSCALL){
+		perror(message);
+	}else if(error == SSL_ERROR_SSL){
+		printf("%s\n", ERR_error_string(ERR_get_error(),NULL));
+	}
+}
+
 void process_send_ssl(endpoint_t *e)
 {
 	int r;
@@ -149,7 +221,8 @@ void process_recv_ssl(endpoint_t *e)
 				if(err==SSL_ERROR_WANT_READ){
 					return;
 				}else{
-					printf("process_recv_ssl:SSL_peek error:%d\n", err);
+					SSL_perror("process_recv_ssl:SSL_peek error",
+									e->ssl, r);
 					e->recv_state = RECV_ERROR;
 					return;
 				}
@@ -263,19 +336,6 @@ void *io_routine(void *arg){
 	endpoint_t *e = (endpoint_t*)arg;
 	int result;
 
-	struct sigaction sa;
-	sa.sa_handler = SIG_IGN;
-	sa.sa_flags = 0;
-	sigfillset(&sa.sa_mask);
-	sa.sa_restorer = NULL;
-
-	result = sigaction(SIGUSR1, &sa, NULL);
-	if(result==-1){
-		perror("sigaction");
-		recv_terminate(e);
-		return NULL;
-	}
-
 	e->epfd = epoll_create1(0);
 	if(e->epfd==-1){
 		perror("io_routine:epoll_create1(0)");
@@ -305,12 +365,8 @@ void *io_routine(void *arg){
 		return NULL;
 	}
 
-	sigset_t sigmask;
-	sigemptyset(&sigmask);
-	sigaddset(&sigmask, SIGUSR1);
-
 	for(;;){
-		int r = epoll_pwait(e->epfd, revents, 3, -1, &sigmask);
+		int r = epoll_wait(e->epfd, revents, 3, -1);
 		if(r==-1){
 			perror("io_routine:epoll_wait");
 			continue;
@@ -339,8 +395,15 @@ void *io_routine(void *arg){
 				}
 				if(revents[i].events&EPOLLOUT){
 					if(e->send_state==SEND_VERIFY){
-						epoll_ctl(e->epfd, EPOLL_CTL_MOD, e->cfd, &e->ev_cfd_r);
 						e->send_state=SEND_READY;
+						result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
+										   e->cfd, &e->ev_cfd_r);
+						if(result==-1){
+							perror("io_routine:epoll_ctl(MOD cfd)");
+							recv_terminate(e);
+							return NULL;
+						}
+
 						result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
 										   e->send_pipe[0], &e->ev_send);
 						if(result==-1){
@@ -366,78 +429,6 @@ void *io_routine(void *arg){
 			recv_terminate(e);
 			return NULL;
 		}
-	}
-}
-
-void SSL_print_error(char *context)
-{
-	printf("%s:%s\n", context,
-		   ERR_error_string(ERR_get_error(),NULL));
-}
-
-void SSL_perror(char *message, SSL *ssl, int result ){
-	int error = SSL_get_error(ssl, result);
-	char *error_str;
-	switch(error){
-	case SSL_ERROR_NONE:
-		error_str = "SSL_ERROR_NONE";
-		break;
-
-	case SSL_ERROR_ZERO_RETURN:
-		error_str = "SSL_ERROR_ZERO_RETURN";
-		break;
-
-	case SSL_ERROR_WANT_READ:
-		error_str = "SSL_ERROR_WANT_READ";
-		break;
-
-	case SSL_ERROR_WANT_WRITE:
-		error_str = "SSL_ERROR_WANT_WRITE";
-		break;
-
-	case SSL_ERROR_WANT_CONNECT:
-		error_str = "SSL_ERROR_WANT_CONNECT";
-		break;
-
-	case SSL_ERROR_WANT_ACCEPT:
-		error_str = "SSL_ERROR_WANT_ACCEPT";
-		break;
-
-	case SSL_ERROR_WANT_X509_LOOKUP:
-		error_str = "SSL_ERROR_WANT_X509_LOOKUP";
-		break;
-
-	case SSL_ERROR_WANT_ASYNC:
-		error_str = "SSL_ERROR_WANT_ASYNC";
-		break;
-
-	case SSL_ERROR_WANT_ASYNC_JOB:
-		error_str = "SSL_ERROR_WANT_ASYNC_JOB";
-		break;
-
-	case SSL_ERROR_WANT_CLIENT_HELLO_CB:
-		error_str = "SSL_ERROR_WANT_CLIENT_HELLO_CB";
-		break;
-
-	case SSL_ERROR_SYSCALL:
-		error_str = "SSL_ERROR_SYSCALL";
-		break;
-
-	case SSL_ERROR_SSL:
-		error_str = "SSL_ERROR_SSL";
-		break;
-
-	default:
-		error_str = "Unknown Error";
-		break;
-	}
-
-	printf("Error in %s:%s\n",message,error_str);
-
-	if(error == SSL_ERROR_SYSCALL){
-		perror(message);
-	}else if(error == SSL_ERROR_SSL){
-		printf("%s\n", ERR_error_string(ERR_get_error(),NULL));
 	}
 }
 
