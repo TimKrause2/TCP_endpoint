@@ -103,8 +103,8 @@ void process_packet_status(struct packet_status *ps){
 
 void process_packet_data(struct packet_data *pd){
 	int nbytes = pd->header.length - sizeof(struct packet_common);
-	if(nbytes>8)nbytes=8;
-	printf("data packet:\n");
+    printf("data packet: nbytes:%d\n",nbytes);
+    if(nbytes>8)nbytes=8;
 	for(int b=0;b<nbytes;b++){
 		printf("%02hhX",pd->data[b]);
 	}
@@ -147,11 +147,9 @@ void timer_cb(union sigval arg){
 		data[i] = i%8;
 	}
 	char *p1 = packet_data_new(data, BURST_BYTES);
-	char *p2 = packet_data_new(data, BURST_BYTES);
 	free(data);
 	printf("sending burst\n");
 	write(e->send_pipe[1], &p1, sizeof(void*));
-	write(e->send_pipe[1], &p2, sizeof(void*));
 }
 
 void loop_func(endpoint_t *e, void *arg){
@@ -179,10 +177,12 @@ void loop_func(endpoint_t *e, void *arg){
 		case S_STATE_RECEIVE:
 			read(e->recv_pipe[0], &p, sizeof(void *));
 			if(!p){
+                printf("loop_func: terminate\n");
 				loop=0;
 			}else{
-				process_packet(p);
-			}
+                //process_packet(p);
+                write(e->send_pipe[1], &p, sizeof(void*));
+            }
 			break;
 		case S_STATE_QUIT:
 			io_shutdown(e);
@@ -348,7 +348,7 @@ int main( int argc, char *argv[] )
 					continue;
 				}else if(pid==0){
 					// child process
-					endpoint_process(cfd, loop_func, (void*)&s, 1, 1);
+                    endpoint_process(cfd, loop_func, (void*)&s, 0, 1);
 					//printf("child: endpoint_process returned.\n");
 					while(sem_wait(&shm_data->sem)==-1){
 						perror("sem_wait(child)");

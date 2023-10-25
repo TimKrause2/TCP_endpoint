@@ -70,11 +70,9 @@ void timer_cb(union sigval arg){
 		data[i] = i%8;
 	}
 	char *p1 = packet_data_new(data, BURST_BYTES);
-	char *p2 = packet_data_new(data, BURST_BYTES);
 	free(data);
 	printf("sending burst\n");
 	write(e->send_pipe[1], &p1, sizeof(void*));
-	write(e->send_pipe[1], &p2, sizeof(void*));
 }
 
 void loop_func(endpoint_t *e, void *arg){
@@ -96,7 +94,11 @@ void loop_func(endpoint_t *e, void *arg){
 			if(!p){
 				loop = 0;
 			}else{
-				process_packet(p, e);
+                if(c->client_state==C_STATE_R_STATUS)
+                    process_packet(p, e);
+                else
+                    // send the packet back
+                    write(e->send_pipe[1], &p, sizeof(void*));
 				c->client_state = C_STATE_RECEIVE;
 			}
 			break;
@@ -157,7 +159,7 @@ int main( int argc, char *argv[] )
 
 	client_t c;
 	c.client_state = C_STATE_R_STATUS;
-	endpoint_process(sfd, loop_func, (void*)&c, 1, 0);
+    endpoint_process(sfd, loop_func, (void*)&c, 0, 0);
 
 	result = close( sfd );
 	if( result == -1 ){

@@ -36,6 +36,22 @@ void socket_set_nonblock(int fd, int nonblock)
 	fcntl(fd, F_SETFL, flags);
 }
 
+void ignore_sigpipe(void)
+{
+    struct sigaction sa;
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_restorer = NULL;
+
+    int result = sigaction(SIGPIPE, &sa, NULL);
+    if(result==-1)
+    {
+        perror("ignore_sigpipe: sigaction(SIGPIPE,...)");
+        exit(1);
+    }
+}
+
 void send_timer_cb(union sigval arg)
 {
 	endpoint_t *e = (endpoint_t*)arg.sival_ptr;
@@ -130,9 +146,29 @@ void SSL_perror(char *message, SSL *ssl, int result ){
 	}
 }
 
-void process_send_ssl(endpoint_t *e)
+void process_send_ssl(void *arg)
 {
-	int r;
+    endpoint_t *e = (endpoint_t*)arg;
+    if(e->send_state==SEND_VERIFY){
+        e->send_state=SEND_READY;
+        int result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
+                           e->cfd, &e->ev_cfd_r);
+        if(result==-1){
+            perror("process_send_ssl:epoll_ctl(MOD cfd)");
+            e->send_state = SEND_ERROR;
+            return;
+        }
+
+        result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
+                           e->send_pipe[0], &e->ev_send);
+        if(result==-1){
+            perror("process_send_ssl:epoll_ctl(MOD send_pipe[0])");
+            e->send_state = SEND_ERROR;
+            return;
+        }
+        return;
+    }
+    int r;
 	int err;
 	for(;;){
 		r = SSL_write(e->ssl, e->send_buf, e->send_bytes);
@@ -147,6 +183,7 @@ void process_send_ssl(endpoint_t *e)
 			}else{
 				printf("process_send_ssl:SSL_write error:%d\n",err);
 				e->send_state = SEND_ERROR;
+                free(e->send_buf_malloc);
 				return;
 			}
 		}else if(r == e->send_bytes){
@@ -165,31 +202,48 @@ void process_send_ssl(endpoint_t *e)
 	}
 }
 
-void process_send(endpoint_t *e)
+void process_send(void *arg)
 {
-	ssize_t r;
+    endpoint_t *e = (endpoint_t*)arg;
+    ssize_t r;
+    if(e->send_state==SEND_VERIFY){
+        e->send_state=SEND_READY;
+        int result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
+                           e->cfd, &e->ev_cfd_r);
+        if(result==-1){
+            perror("process_send:epoll_ctl(MOD cfd)");
+            e->send_state = SEND_ERROR;
+            return;
+        }
 
+        result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
+                           e->send_pipe[0], &e->ev_send);
+        if(result==-1){
+            perror("process_send:epoll_ctl(MOD send_pipe[0])");
+            e->send_state = SEND_ERROR;
+            return;
+        }
+        return;
+    }
 	while(1){
 //		printf("process_send: send(%d, %p, %ld)\n",
 //			   e->cfd, e->send_buf, e->send_bytes);
 		r = send(e->cfd, e->send_buf, e->send_bytes, 0);
 //		printf("r:%ld\n", r);
 		if(r==-1){
-			switch(errno){
-			case EAGAIN:
-#if EAGAIN != EWOULDBLOCK
-			case EWOULDBLOCK:
-#endif
+            if(errno==EAGAIN || errno==EWOULDBLOCK)
+            {
 				if(e->send_state==SEND_READY){
 					epoll_ctl(e->epfd, EPOLL_CTL_MOD, e->cfd, &e->ev_cfd_rw);
 					e->send_state = SEND_INPROGRESS;
 				}
 				return;
-			default:
+            } else {
 				perror("process_send:send");
+                printf("errno:%d\n",errno);
+                free(e->send_buf_malloc);
 				e->send_state = SEND_ERROR;
 				return;
-
 			}
 		}else if(r == e->send_bytes){
 			if(e->send_state==SEND_READY){
@@ -207,8 +261,9 @@ void process_send(endpoint_t *e)
 	}
 }
 
-void process_recv_ssl(endpoint_t *e)
+void process_recv_ssl(void *arg)
 {
+    endpoint_t *e = (endpoint_t*)arg;
 	int r;
 	int err;
 	struct packet_common header;
@@ -266,9 +321,10 @@ void process_recv_ssl(endpoint_t *e)
 	}
 }
 
-void process_recv(endpoint_t *e)
+void process_recv(void *arg)
 {
-	ssize_t r;
+    endpoint_t *e = (endpoint_t*)arg;
+    ssize_t r;
 	while(1){
 		if(e->recv_state==RECV_HEADER){
 			struct packet_common header;
@@ -302,7 +358,8 @@ void process_recv(endpoint_t *e)
 					return;
 				default:
 					perror("process_recv:recv");
-					e->recv_state = RECV_ERROR;
+                    printf("errno:%d\n",errno);
+                    e->recv_state = RECV_ERROR;
 					free(e->recv_buf_malloc);
 					return;
 				}
@@ -325,6 +382,29 @@ void process_recv(endpoint_t *e)
 		}
 	}
 }
+
+void process_send_pipe(void *arg)
+{
+    endpoint_t *e = (endpoint_t*)arg;
+    ssize_t r = read(e->send_pipe[0], &e->send_buf_malloc, sizeof(void*));
+    if(r==-1){
+        perror("process_send_pipe:read(send_pipe[0])");
+        return;
+    }
+    e->send_buf = e->send_buf_malloc;
+    struct packet_common *header = (struct packet_common*)e->send_buf_malloc;
+    e->send_bytes = header->length;
+    e->process_send_cb(e);
+}
+
+void process_term(void *arg)
+{
+    endpoint_t *e = (endpoint_t*)arg;
+    void *p;
+    read(e->term_pipe[0], &p, sizeof(void*));
+    e->io_terminate = 1;
+}
+
 
 void recv_terminate(endpoint_t *e)
 {
@@ -371,63 +451,45 @@ void *io_routine(void *arg){
 			perror("io_routine:epoll_wait");
 			continue;
 		}
-//		printf("r:%d\n",r);
-		for(int i=0;i<r;i++){
-//			printf("i:%d revents[i].data.fd:%d revents[i].events:%x\n",
-//				   i, revents[i].data.fd, revents[i].events);
-			if(revents[i].data.fd==e->send_pipe[0]){
-//				printf("send_pipe[0] revents:%x.\n", revents[i].events);
-				if(revents[i].events&EPOLLIN){
-					ssize_t r = read(e->send_pipe[0], &e->send_buf_malloc, sizeof(void*));
-					if(r==-1){
-						perror("io_routine:read(send_pipe[0])");
-						continue;
-					}
-					e->send_buf = e->send_buf_malloc;
-					struct packet_common *header = (struct packet_common*)e->send_buf_malloc;
-					e->send_bytes = header->length;
-					e->process_send_cb(e);
-				}
-			}else if(revents[i].data.fd == e->cfd){
-//				printf("cfd revents:%x\n",revents[i].events);
-				if(revents[i].events&EPOLLIN){
-					e->process_recv_cb(e);
-				}
-				if(revents[i].events&EPOLLOUT){
-					if(e->send_state==SEND_VERIFY){
-						e->send_state=SEND_READY;
-						result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
-										   e->cfd, &e->ev_cfd_r);
-						if(result==-1){
-							perror("io_routine:epoll_ctl(MOD cfd)");
-							recv_terminate(e);
-							return NULL;
-						}
+        for(int i=0;i<r;i++)
+        {
+            struct epoll_dispatch *ed =
+                    (struct epoll_dispatch*)revents[i].data.ptr;
 
-						result = epoll_ctl(e->epfd, EPOLL_CTL_MOD,
-										   e->send_pipe[0], &e->ev_send);
-						if(result==-1){
-							perror("io_routtine:epoll_ctl(MOD send_pipe[0])");
-							recv_terminate(e);
-							return NULL;
-						}
-					}else{
-						e->process_send_cb(e);
-					}
-				}
-			}else if(revents[i].data.fd==e->term_pipe[0]){
-				if(revents[i].events&EPOLLIN){
-					void *p;
-					read(e->term_pipe[0], &p, sizeof(void*));
-					recv_terminate(e);
-					return NULL;
-				}
-			}
-		}
-		if(e->send_state==SEND_ERROR || e->recv_state==RECV_ERROR){
-			printf("io_routine: ERROR quit.\n");
-			recv_terminate(e);
-			return NULL;
+            if(ed->in_cb && revents[i].events&EPOLLIN)
+            {
+                ed->in_cb(ed->arg);
+            }
+
+            if(ed->out_cb && revents[i].events&EPOLLOUT)
+            {
+                ed->out_cb(ed->arg);
+            }
+        }
+
+        if((e->send_state==SEND_ERROR)
+                || (e->recv_state==RECV_ERROR)
+                || e->io_terminate)
+        {
+            printf("io_routine: ERROR or io_terminate.\n");
+            if(e->recv_state == RECV_INPROGRESS)
+            {
+                free(e->recv_buf_malloc);
+            }
+            if(e->send_state == SEND_INPROGRESS)
+            {
+                free(e->send_buf_malloc);
+            }
+            ssize_t r;
+            void *packet;
+            socket_set_nonblock(e->send_pipe[0], 1);
+            while((r=read(e->send_pipe[0], &packet, sizeof(void*)))==sizeof(void*))
+            {
+                if(packet)
+                    free(packet);
+            }
+            recv_terminate(e);
+            return NULL;
 		}
 	}
 }
@@ -439,6 +501,7 @@ void endpoint_process(
 		int ssl_enable,
 		int server)
 {
+    ignore_sigpipe();
 	endpoint_t *e;
 	e = malloc(sizeof(endpoint_t));
 	if(!e)return;
@@ -574,16 +637,28 @@ void endpoint_process(
 	timer_set(&e->send_timer, CONFIRM_TIMEOUT_S);
 	timer_set(&e->recv_timer, WATCHDOG_TIMEOUT_S);
 
-	e->ev_cfd_r.data.fd = e->cfd;
-	e->ev_cfd_rw.data.fd = e->cfd;
+    e->ev_cfd_r.data.ptr = &e->ed_cfd;
+    e->ev_cfd_rw.data.ptr = &e->ed_cfd;
 	e->ev_cfd_r.events = EPOLLIN;
 	e->ev_cfd_rw.events = EPOLLIN | EPOLLOUT;
-	e->ev_send.data.fd = e->send_pipe[0];
+    e->ev_send.data.ptr = &e->ed_send;
 	e->ev_send.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-	e->ev_term.data.fd = e->term_pipe[0];
+    e->ev_term.data.ptr = &e->ed_term;
 	e->ev_term.events = EPOLLIN;
 
-	r = pthread_create(&e->io_thread, NULL, io_routine, (void*)e);
+    e->ed_cfd.arg = e;
+    e->ed_cfd.in_cb = e->process_recv_cb;
+    e->ed_cfd.out_cb = e->process_send_cb;
+    e->ed_send.arg = e;
+    e->ed_send.in_cb = process_send_pipe;
+    e->ed_send.out_cb = NULL;
+    e->ed_term.arg = e;
+    e->ed_term.in_cb = process_term;
+    e->ed_term.out_cb = NULL;
+
+    e->io_terminate = 0;
+
+    r = pthread_create(&e->io_thread, NULL, io_routine, (void*)e);
 	if(r!=0){
 		errno = r;
 		perror("pthread_create");

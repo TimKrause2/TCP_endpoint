@@ -7,8 +7,15 @@
 
 typedef struct endpoint_s endpoint_t;
 typedef void (*loop_func_ptr)(endpoint_t *, void *);
-typedef void (*io_process)(endpoint_t *);
+typedef void (*io_process)(void *);
+typedef void (*dispatch_cb)(void *);
 
+struct epoll_dispatch
+{
+    void *arg;
+    dispatch_cb in_cb;
+    dispatch_cb out_cb;
+};
 
 struct endpoint_s
 {
@@ -33,14 +40,18 @@ struct endpoint_s
 	char  *recv_buf;
 	size_t recv_bytes;
 
-	int epfd;
+    int epfd;
 	struct epoll_event ev_cfd_r;
 	struct epoll_event ev_cfd_rw;
 	struct epoll_event ev_send;
 	struct epoll_event ev_term;
+    struct epoll_dispatch ed_cfd;
+    struct epoll_dispatch ed_send;
+    struct epoll_dispatch ed_term;
 
 	unsigned int ssl_enable:1;
 	unsigned int server:1;
+    unsigned int io_terminate:1;
 
 	SSL_CTX *ssl_ctx;
 	SSL     *ssl;
