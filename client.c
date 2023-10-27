@@ -20,6 +20,7 @@ void process_packet_status(struct packet_status *ps, endpoint_t *e){
 		io_shutdown(e);
 		break;
 	case P_ST_CODE_CONFIRM:
+        printf("Confirm packet status.\n");
 		break;
 	}
 }
@@ -62,9 +63,10 @@ enum {
 };
 
 #define BURST_BYTES (16*1024*1024)
+timer *burst_timer;
 
-void timer_cb(union sigval arg){
-	endpoint_t *e = (endpoint_t *)arg.sival_ptr;
+void timer_cb(void * arg){
+    endpoint_t *e = (endpoint_t *)arg;
 	char *data = malloc(BURST_BYTES);
 	for(int i=0;i<BURST_BYTES;i++){
 		data[i] = i%8;
@@ -73,16 +75,14 @@ void timer_cb(union sigval arg){
 	free(data);
 	printf("sending burst\n");
 	write(e->send_pipe[1], &p1, sizeof(void*));
+    timer_destroy(burst_timer);
 }
 
 void loop_func(endpoint_t *e, void *arg){
 	client_t *c = (client_t*)arg;
 
-	timer burst_timer;
-	union sigval bt_arg;
-	bt_arg.sival_ptr = (void*)e;
-	timer_init(&burst_timer, timer_cb, bt_arg);
-	timer_set(&burst_timer, 7);
+    burst_timer = timer_new(timer_cb, e);
+    timer_set(burst_timer, 7);
 
 	int loop=1;
 	char *p;
@@ -94,11 +94,11 @@ void loop_func(endpoint_t *e, void *arg){
 			if(!p){
 				loop = 0;
 			}else{
-                if(c->client_state==C_STATE_R_STATUS)
+                //if(c->client_state==C_STATE_R_STATUS)
                     process_packet(p, e);
-                else
+                //else
                     // send the packet back
-                    write(e->send_pipe[1], &p, sizeof(void*));
+                //    write(e->send_pipe[1], &p, sizeof(void*));
 				c->client_state = C_STATE_RECEIVE;
 			}
 			break;
@@ -116,7 +116,11 @@ void loop_func(endpoint_t *e, void *arg){
 
 int main( int argc, char *argv[] )
 {
-	int sfd;
+    if(!timer_init()){
+        printf("Couldn't initialize timer system.");
+        exit(1);
+    }
+    int sfd;
 	int result;
 	struct addrinfo hints;
 	struct addrinfo *addrinfo_res;

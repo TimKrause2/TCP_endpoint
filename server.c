@@ -26,6 +26,8 @@
 #define N_CHILDREN_MAX 4
 #define LISTEN_BACKLOG 10
 
+timer *burst_timer;
+
 struct shm_data
 {
 	sem_t sem;
@@ -97,6 +99,7 @@ void process_packet_status(struct packet_status *ps){
 
 		break;
 	case P_ST_CODE_CONFIRM:
+        printf("Confirm packet status.\n");
 		break;
 	}
 }
@@ -140,8 +143,8 @@ typedef struct server_s server_t;
 
 #define BURST_BYTES (16*1024*1024)
 
-void timer_cb(union sigval arg){
-	endpoint_t *e = (endpoint_t *)arg.sival_ptr;
+void timer_cb(void* arg){
+    endpoint_t *e = (endpoint_t *)arg;
 	char *data = malloc(BURST_BYTES);
 	for(int i=0;i<BURST_BYTES;i++){
 		data[i] = i%8;
@@ -150,16 +153,14 @@ void timer_cb(union sigval arg){
 	free(data);
 	printf("sending burst\n");
 	write(e->send_pipe[1], &p1, sizeof(void*));
+    timer_destroy(burst_timer);
 }
 
 void loop_func(endpoint_t *e, void *arg){
 	server_t *s = (server_t*)arg;
 
-	timer burst_timer;
-	union sigval bt_arg;
-	bt_arg.sival_ptr = (void*)e;
-	timer_init(&burst_timer, timer_cb, bt_arg);
-	timer_set(&burst_timer, 7);
+    burst_timer = timer_new(timer_cb, e);
+    timer_set(burst_timer, 7);
 
 	int loop=1;
 	char *p;
@@ -180,8 +181,8 @@ void loop_func(endpoint_t *e, void *arg){
                 printf("loop_func: terminate\n");
 				loop=0;
 			}else{
-                //process_packet(p);
-                write(e->send_pipe[1], &p, sizeof(void*));
+                process_packet(p);
+                //write(e->send_pipe[1], &p, sizeof(void*));
             }
 			break;
 		case S_STATE_QUIT:
@@ -200,7 +201,7 @@ void loop_func(endpoint_t *e, void *arg){
 
 int main( int argc, char *argv[] )
 {
-	int sfd;
+    int sfd;
 	int result;
 	struct addrinfo hints;
 	struct addrinfo *ai_res;
@@ -347,8 +348,12 @@ int main( int argc, char *argv[] )
 					close(cfd);
 					continue;
 				}else if(pid==0){
-					// child process
-                    endpoint_process(cfd, loop_func, (void*)&s, 0, 1);
+                    // child process
+                    if(!timer_init()){
+                        printf("Couldn't initialize timer system.");
+                    }else{
+                        endpoint_process(cfd, loop_func, (void*)&s, 0, 1);
+                    }
 					//printf("child: endpoint_process returned.\n");
 					while(sem_wait(&shm_data->sem)==-1){
 						perror("sem_wait(child)");

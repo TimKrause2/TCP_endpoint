@@ -24,8 +24,8 @@ struct endpoint_s
 	int send_pipe[2];
 	int term_pipe[2];
 
-	timer send_timer;
-	timer recv_timer;
+    timer *send_timer;
+    timer *recv_timer;
 	pthread_t io_thread;
 
 	io_process process_send_cb;

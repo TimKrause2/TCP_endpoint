@@ -52,9 +52,9 @@ void ignore_sigpipe(void)
     }
 }
 
-void send_timer_cb(union sigval arg)
+void send_timer_cb(void * arg)
 {
-	endpoint_t *e = (endpoint_t*)arg.sival_ptr;
+    endpoint_t *e = (endpoint_t*)arg;
 
 	char *p = packet_status_new(P_ST_CODE_CONFIRM);
 	if(!p) return;
@@ -67,9 +67,9 @@ void io_shutdown(endpoint_t *e)
 	write(e->term_pipe[1], &data, sizeof(void *));
 }
 
-void recv_timer_cb(union sigval arg)
+void recv_timer_cb(void * arg)
 {
-	endpoint_t *e = (endpoint_t*)arg.sival_ptr;
+    endpoint_t *e = (endpoint_t*)arg;
 
 	io_shutdown(e);
 }
@@ -192,12 +192,12 @@ void process_send_ssl(void *arg)
 			}
 			e->send_state = SEND_VERIFY;
 			free(e->send_buf_malloc);
-			timer_set(&e->send_timer, CONFIRM_TIMEOUT_S);
+            timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
 			return;
 		}else{
 			e->send_buf += r;
 			e->send_bytes -= r;
-			timer_set(&e->send_timer, CONFIRM_TIMEOUT_S);
+            timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
 		}
 	}
 }
@@ -251,12 +251,12 @@ void process_send(void *arg)
 			}
 			e->send_state = SEND_VERIFY;
 			free(e->send_buf_malloc);
-			timer_set(&e->send_timer, CONFIRM_TIMEOUT_S);
+            timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
 			return;
 		}else{
 			e->send_buf += r;
 			e->send_bytes -= r;
-			timer_set(&e->send_timer, CONFIRM_TIMEOUT_S);
+            timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
 		}
 	}
 }
@@ -306,13 +306,13 @@ void process_recv_ssl(void *arg)
 				}
 			}else if(r == e->recv_bytes){
 				write(e->recv_pipe[1], &e->recv_buf_malloc, sizeof(void*));
-				timer_set(&e->recv_timer, WATCHDOG_TIMEOUT_S);
+                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
 				e->recv_state = RECV_HEADER;
 				return;
 			}else{
 				e->recv_buf += r;
 				e->recv_bytes -= r;
-				timer_set(&e->recv_timer, WATCHDOG_TIMEOUT_S);
+                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
 			}
 			break;
 		case RECV_ERROR:
@@ -366,7 +366,7 @@ void process_recv(void *arg)
 			}else if(r == e->recv_bytes){
 				e->recv_state = RECV_HEADER;
 				write(e->recv_pipe[1], &e->recv_buf_malloc, sizeof(void*));
-				timer_set(&e->recv_timer, WATCHDOG_TIMEOUT_S);
+                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
 				return;
 			}else if(r == 0){
 				free(e->recv_buf_malloc);
@@ -375,7 +375,7 @@ void process_recv(void *arg)
 			}else{
 				e->recv_buf += r;
 				e->recv_bytes -= r;
-				timer_set(&e->recv_timer, WATCHDOG_TIMEOUT_S);
+                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
 			}
 		}else if(e->recv_state==RECV_ERROR){
 			return;
@@ -619,23 +619,19 @@ void endpoint_process(
 		return;
 	}
 
-	union sigval arg;
-	arg.sival_ptr = (void*)e;
+    e->send_timer = timer_new(send_timer_cb, e);
+    if(!e->send_timer){
+        printf("Problem obtaining send_timer.\n");
+        return;
+    }
 
-	r = timer_init(&e->send_timer, send_timer_cb, arg);
-	if(r==-1){
-		perror("timer_init(send_timer)");
-		return;
-	}
-
-	r = timer_init(&e->recv_timer, recv_timer_cb, arg);
-	if(r==-1){
-		perror("timer_init(recv_timer)");
-		return;
-	}
-
-	timer_set(&e->send_timer, CONFIRM_TIMEOUT_S);
-	timer_set(&e->recv_timer, WATCHDOG_TIMEOUT_S);
+    e->recv_timer = timer_new(recv_timer_cb, e);
+    if(!e->recv_timer){
+        printf("Problem obtaining recv_timer.\n");
+        return;
+    }
+    timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
+    timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
 
     e->ev_cfd_r.data.ptr = &e->ed_cfd;
     e->ev_cfd_rw.data.ptr = &e->ed_cfd;
