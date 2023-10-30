@@ -6,7 +6,6 @@
 #include "timer.h"
 
 list_element *le_head = NULL;
-list_element *le_pending = NULL;
 sem_t list_sem;
 cbl_element *cbl_head = NULL;
 cbl_element *cbl_tail = NULL;
@@ -14,6 +13,7 @@ sem_t free_sem;
 f_element *f_head = NULL;
 f_element *f_tail = NULL;
 long current_second=0;
+sem_t timer_destroy_sem;
 
 void free_list_lock(void)
 {
@@ -124,16 +124,14 @@ void list_element_push(list_element *le)
 void list_element_remove(list_element *le)
 {
     if(le_head == le){
-        le_head = le->next;
-        le_head->prev = NULL;
+        if(le_head->next)
+            le_head->next->prev = NULL;
+        le_head = le_head->next;
     }else{
         le->prev->next = le->next;
         if(le->next){
             le->next->prev = le->prev;
         }
-    }
-    if(le_pending==le){
-        le_pending = le_pending->next;
     }
 }
 
@@ -154,6 +152,21 @@ void list_element_insert(list_element *le, list_element *le_at)
 
 void list_element_sort(list_element *le)
 {
+    if(le->t->expire_second==-1){
+        // remove and insert at the beginning
+        list_element_remove(le);
+        if(!le_head){
+            le_head = le;
+            le->next = NULL;
+            le->prev = NULL;
+        }else{
+            le_head->prev = le;
+            le->next = le_head;
+            le->prev = NULL;
+            le_head = le;
+        }
+        return;
+    }
     list_element *le_rest = le->next;
     if(le_rest){
         while(le_rest->t->expire_second<le->t->expire_second){
@@ -223,6 +236,7 @@ timer *timer_new( void (*expire_cb)(void *), void *arg)
 
 void timer_destroy(timer *t)
 {
+    if(t->locked_out) return;
     t->locked_out = 1;
     timer_lock(t);
     list_element_delete(t->le);
@@ -247,7 +261,11 @@ void timer_set(timer *t, int n_seconds)
 {
     if(t->locked_out) return;
     timer_lock(t);
-    t->expire_second = current_second + n_seconds;
+    if(n_seconds>=0){
+        t->expire_second = current_second + n_seconds;
+    }else{
+        t->expire_second = -1;
+    }
     list_elements_lock();
     list_element_sort(t->le);
     list_elements_unlock();
@@ -261,15 +279,20 @@ void timer_update_cb(union sigval arg)
     current_second++;
     list_elements_lock();
     list_element *le = le_head;
+    while(le && le->t->expire_second==-1){
+        if(!le->t->locked_out)
+            cbl_add_timer(le->t);
+        le = le->next;
+    }
+
     while(le && le->t->expire_second<current_second){
         le = le->next;
     }
-    le_pending = le;
 
-    while(le_pending && le_pending->t->expire_second == current_second){
-        if(!le_pending->t->locked_out)
-            cbl_add_timer(le_pending->t);
-        le_pending = le_pending->next;
+    while(le && le->t->expire_second == current_second){
+        if(!le->t->locked_out)
+            cbl_add_timer(le->t);
+        le = le->next;
     }
 
     list_elements_unlock();
