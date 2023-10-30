@@ -31,5 +31,9 @@ char *packet_data_new(char *data, int nbytes)
 	return (char *)pd;
 }
 
-
+unsigned int packet_length(void *packet)
+{
+    struct packet_common *h = (struct packet_common*)packet;
+    return h->length;
+}
 

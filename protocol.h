@@ -38,4 +38,7 @@ struct packet_data
 
 char *packet_data_new(char *data, int nbytes);
 
+unsigned int packet_length(void *packet);
+
+
 #endif
