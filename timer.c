@@ -50,7 +50,7 @@ void free_list_purge(void)
     free_list_lock();
     f_element *f = f_head;
     while(f){
-        printf("freeing... ptr:0x%p\n", f->ptr);
+        //printf("freeing... ptr:0x%p\n", f->ptr);
         free(f->ptr);
         f_element *ff = f;
         f = f->next;

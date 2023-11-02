@@ -733,6 +733,7 @@ ele *endpoint_list_push(endpoint *e)
         el_head = le;
     }
     N_endpoints++;
+    printf("endpoint_list_push: New endpoint N_endpoints:%d\n", N_endpoints);
     endpoint_list_unlock();
     return le;
 }
@@ -751,6 +752,7 @@ void endpoint_list_remove_raw(ele *le)
     }
     free(le);
     N_endpoints--;
+    printf("endpoint_list_remove_raw: Deleted endpoint N_endpoints:%d\n", N_endpoints);
 }
 
 void endpoint_list_remove(ele *le)
@@ -878,34 +880,13 @@ void process_send2(void *arg)
     if(e->send_locked_out)
         goto return_unlock;
     if(e->send_state==SEND_OPEN){
-        // Unexpected event - must be an error
-        printf("process_send2: send_state==SEND_OPEN\n");
-        goto error_unlock;
+        //printf("process_send2: send_state==SEND_OPEN\n");
+        goto return_unlock;
     }
     if(e->send_state==SEND_ERROR){
         goto return_unlock;
     }
-//    if(e->send_state==SEND_VERIFY){
-//        //printf("process_send2: deleting e->cfd from interest list.\n");
-//        int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL,
-//                           e->cfd, NULL);
-//        if(result==-1){
-//            perror("process_send2:epoll_ctl(DEL cfd)");
-//            //goto error_unlock;
-//        }
-//        s_ptr *sp = fifo_read(e->send_fifo);
-//        if(sp){
-//            e->send_buf_s_ptr = sp;
-//            e->send_buf = shared_ptr_data(sp);
-//            e->send_bytes = packet_length(e->send_buf);
-//            e->send_state = SEND_READY;
-//            goto procede_to_send;
-//        }else{
-//            e->send_state=SEND_OPEN;
-//        }
-//        goto return_unlock;
-//    }
-procede_to_send:
+
     while(1){
 //		printf("process_send: send(%d, %p, %ld)\n",
 //			   e->cfd, e->send_buf, e->send_bytes);
@@ -916,11 +897,11 @@ procede_to_send:
             {
                 if(e->send_state==SEND_READY){
                     //printf("process_send2: inprogress ADD e->cfd\n");
-                    int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_w);
-                    if(result==-1){
-                        perror("process_send2: epoll_ctl EAGAIN");
-                        //goto error_unlock;
-                    }
+//                    int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_w);
+//                    if(result==-1){
+//                        perror("process_send2: epoll_ctl EAGAIN");
+//                        //goto error_unlock;
+//                    }
                     e->send_state = SEND_INPROGRESS;
                 }
                 goto return_unlock;
@@ -934,14 +915,14 @@ procede_to_send:
             //printf("process_send2: send complete r=%ld\n", e->send_bytes);
             shared_ptr_free(e->send_buf_s_ptr);
             timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
-            if(e->send_state==SEND_INPROGRESS){
-                //printf("process_send2: complete MOD e->cfd\n");
-                int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL, e->cfd, NULL);
-                if(result==-1){
-                    perror("process_send2: epoll_ctl verify");
-                    //goto error_unlock;
-                }
-            }
+//            if(e->send_state==SEND_INPROGRESS){
+//                //printf("process_send2: complete MOD e->cfd\n");
+//                int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL, e->cfd, NULL);
+//                if(result==-1){
+//                    perror("process_send2: epoll_ctl verify");
+//                    //goto error_unlock;
+//                }
+//            }
             s_ptr *sp = fifo_read(e->send_fifo);
             if(sp){
                 e->send_buf_s_ptr = sp;
@@ -1293,11 +1274,19 @@ endpoint* endpoint_new(int fd,
     // ADD to the read epoll instance interest list
     result = epoll_ctl(recv_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_r);
     if(result==-1){
-        perror("endpoint_new: epoll_ctl(ADD)");
+        perror("endpoint_new: epoll_ctl(recv, ADD)");
         goto error_endpoint_list;
     }
 
+    result = epoll_ctl(send_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_w);
+    if(result==-1){
+        perror("endpoint_new: epoll_ctl(send, ADD)");
+        goto error_recv_epoll;
+    }
+
     return e;
+error_recv_epoll:
+    epoll_ctl(recv_epoll_fd, EPOLL_CTL_DEL, e->cfd, NULL);
 error_endpoint_list:
     endpoint_list_remove(e->le);
 error_cfd:
@@ -1398,7 +1387,8 @@ void endpoint_send(endpoint *e, s_ptr *sp)
             e->send_buf = shared_ptr_data(sp);
             e->send_bytes = packet_length(e->send_buf);
             sem_post(&e->send_sem);
-            process_send2(e);
+            //process_send2(e);
+            epoll_ctl(send_epoll_fd, EPOLL_CTL_MOD, e->cfd, &e->ev_cfd_w);
             sem_post(&e->sem);
             return;
         }else{
