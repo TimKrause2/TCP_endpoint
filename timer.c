@@ -279,17 +279,18 @@ void timer_update_cb(union sigval arg)
     current_second++;
     list_elements_lock();
     list_element *le = le_head;
-    while(le && le->t->expire_second==-1){
-        if(!le->t->locked_out)
-            cbl_add_timer(le->t);
-        le = le->next;
-    }
-
     while(le && le->t->expire_second<current_second){
         le = le->next;
     }
 
     while(le && le->t->expire_second == current_second){
+        if(!le->t->locked_out)
+            cbl_add_timer(le->t);
+        le = le->next;
+    }
+
+    le = le_head;
+    while(le && le->t->expire_second==-1){
         if(!le->t->locked_out)
             cbl_add_timer(le->t);
         le = le->next;

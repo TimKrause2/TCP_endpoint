@@ -824,7 +824,7 @@ void *send_thread_routine(void *arg)
             continue;
         }else if(Nevents){
             epoll_dispatch *ed = (epoll_dispatch*)event.data.ptr;
-            printf("send_thread_routine: calling thread num=%d arg=0x%p\n", s->num, ed->arg);
+            //printf("send_thread_routine: calling thread num=%d arg=0x%p\n", s->num, ed->arg);
             ed->out_cb(ed->arg);
         }
     }
@@ -843,19 +843,40 @@ void *recv_thread_routine(void *arg)
             continue;
         }else if(Nevents){
             epoll_dispatch *ed = (epoll_dispatch*)event.data.ptr;
-            printf("recv_thread_routine: calling... thread num=%d, arg=%p\n",s->num,ed->arg);
+            //printf("recv_thread_routine: calling... thread num=%d, arg=%p\n",s->num,ed->arg);
             ed->in_cb(ed->arg);
         }
     }
 }
 
+char *send_state_str(int send_state)
+{
+    switch(send_state)
+    {
+    case SEND_OPEN:
+        return "SEND_OPEN";
+    case SEND_READY:
+        return "SEND_READY";
+    case SEND_INPROGRESS:
+        return "SEND_INPROGRESS";
+    case SEND_VERIFY:
+        return "SEND_VERIFY";
+    case SEND_ERROR:
+        return "SEND_ERROR";
+    default:
+        return "Unknown";
+    }
+}
+
 void process_send2(void *arg)
 {
-    //printf("process_send2: arg=0x%p\n",arg);
+    //printf("process_send2: arg=%p\n",arg);
     endpoint *e = (endpoint*)arg;
     ssize_t r;
     if(e->send_locked_out) return;
     sem_wait(&e->send_sem);
+    if(e->send_locked_out)
+        goto return_unlock;
     if(e->send_state==SEND_OPEN){
         // Unexpected event - must be an error
         printf("process_send2: send_state==SEND_OPEN\n");
@@ -865,17 +886,18 @@ void process_send2(void *arg)
         goto return_unlock;
     }
     if(e->send_state==SEND_VERIFY){
+        //printf("process_send2: deleting e->cfd from interest list.\n");
         int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL,
                            e->cfd, NULL);
         if(result==-1){
             perror("process_send2:epoll_ctl(DEL cfd)");
             //goto error_unlock;
         }
-        void *packet = fifo_read(e->send_fifo);
-        if(packet){
-            e->send_buf_malloc = packet;
-            e->send_buf = packet;
-            e->send_bytes = packet_length(packet);
+        s_ptr *sp = fifo_read(e->send_fifo);
+        if(sp){
+            e->send_buf_s_ptr = sp;
+            e->send_buf = shared_ptr_data(sp);
+            e->send_bytes = packet_length(e->send_buf);
             e->send_state = SEND_READY;
             goto procede_to_send;
         }else{
@@ -893,26 +915,36 @@ procede_to_send:
             if(errno==EAGAIN || errno==EWOULDBLOCK)
             {
                 if(e->send_state==SEND_READY){
+                    //printf("process_send2: inprogress ADD e->cfd\n");
                     int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_w);
                     if(result==-1){
                         perror("process_send2: epoll_ctl EAGAIN");
                         //goto error_unlock;
                     }
                     e->send_state = SEND_INPROGRESS;
-                    goto return_unlock;
                 }
-                return;
+                goto return_unlock;
             } else {
                 perror("process_send2: send");
                 printf("errno:%d\n",errno);
-                free(e->send_buf_malloc);
+                shared_ptr_free(e->send_buf_s_ptr);
                 goto error_unlock;
             }
         }else if(r == e->send_bytes){
-            free(e->send_buf_malloc);
+            //printf("process_send2: send complete r=%ld\n", e->send_bytes);
+            shared_ptr_free(e->send_buf_s_ptr);
             timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
             if(e->send_state==SEND_READY){
+                //printf("process_send2: complete ADD e->cfd\n");
                 int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_w);
+                if(result==-1){
+                    perror("process_send2: epoll_ctl verify");
+                    //goto error_unlock;
+                }
+            }
+            if(e->send_state==SEND_INPROGRESS){
+                //printf("process_send2: complete MOD e->cfd\n");
+                int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_MOD, e->cfd, &e->ev_cfd_w);
                 if(result==-1){
                     perror("process_send2: epoll_ctl verify");
                     //goto error_unlock;
@@ -933,6 +965,7 @@ error_unlock:
     epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL, e->cfd, NULL);
 
 return_unlock:
+    //printf("process_send2: e->send_state:%s\n", send_state_str(e->send_state));
     sem_post(&e->send_sem);
 }
 
@@ -942,10 +975,11 @@ void process_recv2(void *arg)
     void *packet = NULL;
     if(e->recv_locked_out) return;
     sem_wait(&e->recv_sem);
-
-    if(e->recv_state == RECV_ERROR){
+    if(e->recv_locked_out)
         goto normal_return;
-    }
+
+    if(e->recv_state == RECV_ERROR)
+        goto normal_return;
 
     ssize_t r;
     while(1) {
@@ -953,7 +987,11 @@ void process_recv2(void *arg)
             struct packet_common header;
             r = recv(e->cfd, &header, sizeof(header), MSG_PEEK);
             if(r==-1){
+                if(errno==EAGAIN || errno==EWOULDBLOCK){
+                    goto normal_return;
+                }
                 perror("process_recv:recv(MSG_PEEK)");
+                printf("errno:%d\n",errno);
                 goto error_return;
             }
             if (r==0){
@@ -985,15 +1023,14 @@ void process_recv2(void *arg)
                 goto normal_return;
             }else if(r == 0){
                 free(e->recv_buf_malloc);
-                e->recv_state = RECV_ERROR;
-                return;
+                goto error_return;
             }else{
                 e->recv_buf += r;
                 e->recv_bytes -= r;
                 timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
             }
         }else if(e->recv_state==RECV_ERROR){
-            return;
+            goto normal_return;
         }
     }
 
@@ -1005,9 +1042,9 @@ error_return:
     return;
 
 normal_return:
-    sem_post(&e->recv_sem);
     if(packet)
         e->recv_packet_cb(packet, e);
+    sem_post(&e->recv_sem);
     return;
 
 }
@@ -1040,7 +1077,12 @@ void send_expire_cb(void *arg)
     endpoint *e = arg;
     char *p = packet_status_new(P_ST_CODE_CONFIRM);
     if(!p) return;
-    endpoint_send(e, p);
+    s_ptr *sp = shared_ptr_new(p);
+    if(!sp){
+        free(p);
+    }else{
+        endpoint_send(e, sp);
+    }
 }
 
 void recv_expire_cb(void *arg)
@@ -1110,6 +1152,8 @@ int endpoints_init(int N_send_threads_in, int N_recv_threads_in)
     }
 
     timer_set(per_second_timer, -1);
+
+    ignore_sigpipe();
 
     return 1;
 }
@@ -1313,6 +1357,10 @@ void endpoint_reap(endpoint *e)
 
     // free the resources in the object
     close(e->cfd);
+    s_ptr *sp;
+    while(sp = fifo_read(e->send_fifo)){
+        shared_ptr_free(sp);
+    }
     fifo_delete(e->send_fifo);
     sem_destroy(&e->recv_sem);
     sem_destroy(&e->send_sem);
@@ -1321,17 +1369,17 @@ void endpoint_reap(endpoint *e)
     timer_destroy(e->send_timer);
 
     if(e->send_state==SEND_READY || e->send_state==SEND_INPROGRESS)
-        free(e->send_buf_malloc);
+        shared_ptr_free(e->send_buf_s_ptr);
 
     if(e->recv_state==RECV_INPROGRESS)
         free(e->recv_buf_malloc);
 }
 
-void endpoint_send(endpoint *e, void *packet)
+void endpoint_send(endpoint *e, s_ptr *sp)
 {
     if(e->locked_out){
         printf("endpoint_send: locked_out\n");
-        free(packet);
+        shared_ptr_free(sp);
         return;
     }
     int r;
@@ -1339,31 +1387,31 @@ void endpoint_send(endpoint *e, void *packet)
     if(fifo_empty(e->send_fifo)){
         if(e->send_locked_out){
             printf("endpoint_send: send_locked_out\n");
-            free(packet);
+            shared_ptr_free(sp);
             sem_post(&e->sem);
             return;
         }
         sem_wait(&e->send_sem);
         if(e->send_state==SEND_OPEN){
             e->send_state = SEND_READY;
-            e->send_buf_malloc = packet;
-            e->send_buf = packet;
-            e->send_bytes = packet_length(packet);
+            e->send_buf_s_ptr = sp;
+            e->send_buf = shared_ptr_data(sp);
+            e->send_bytes = packet_length(e->send_buf);
             sem_post(&e->send_sem);
             process_send2(e);
             sem_post(&e->sem);
             return;
         }else{
-            if(!fifo_write(e->send_fifo, packet)){
-                free(packet);
+            if(!fifo_write(e->send_fifo, sp)){
+                shared_ptr_free(sp);
             }
             sem_post(&e->send_sem);
             sem_post(&e->sem);
             return;
         }
     }else{
-        if(!fifo_write(e->send_fifo, packet)){
-            free(packet);
+        if(!fifo_write(e->send_fifo, sp)){
+            shared_ptr_free(sp);
         }
         sem_post(&e->sem);
         return;

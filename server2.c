@@ -23,7 +23,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 
-#define ENDPOINTS_MAX 2
+#define ENDPOINTS_MAX 10
 #define LISTEN_BACKLOG 10
 #define N_SEND_THREADS 2
 #define N_RECV_THREADS 2
@@ -45,6 +45,49 @@ void process_packet_status(struct packet_status *ps){
         printf("Confirm packet status.\n");
 		break;
 	}
+    free(ps);
+}
+
+typedef struct endpoint_send_element ese;
+
+struct endpoint_send_element
+{
+    endpoint *e;
+    ese *next;
+};
+
+ese *es_head = NULL;
+ese *es_tail = NULL;
+
+ese *es_new(endpoint *e)
+{
+    ese *es = malloc(sizeof(ese));
+    if(!es)
+        return NULL;
+    es->e = e;
+    if(!es_head){
+        es_head = es;
+        es_tail = es;
+        es->next = NULL;
+    }else{
+        es_tail->next = es;
+        es_tail = es;
+        es->next = NULL;
+    }
+    return es;
+}
+
+void es_call(s_ptr *sp)
+{
+    ese *es = es_head;
+    while(es){
+        endpoint_send(es->e, sp);
+        ese *esf = es;
+        es = es->next;
+        free(esf);
+    }
+    es_head = NULL;
+    es_tail = NULL;
 }
 
 void process_packet_data(struct packet_data *pd){
@@ -55,6 +98,24 @@ void process_packet_data(struct packet_data *pd){
 		printf("%02hhX",pd->data[b]);
 	}
 	printf("\n");
+    //free(pd);
+    //return;
+
+    // broadcast to all endpoints
+    s_ptr *sp = shared_ptr_new(pd);
+    if(!sp){
+        printf("packet dropped.\n");
+        free(pd);
+        return;
+    }
+    endpoint_list_lock();
+    ele *le = el_head;
+    while(le){
+        endpoint_send(le->e, shared_ptr_alloc(sp));
+        le = le->next;
+    }
+    endpoint_list_unlock();
+    shared_ptr_free(sp);
 }
 
 void process_packet(char *p){
@@ -67,7 +128,6 @@ void process_packet(char *p){
 		process_packet_data((struct packet_data*)p);
 		break;
 	}
-	free(p);
 }
 
 void server_recv_cb(void *packet, endpoint *e)
@@ -225,7 +285,8 @@ int main( int argc, char *argv[] )
                     p = packet_status_new(P_ST_CODE_BUSY);
                 else
                     p = packet_status_new(P_ST_CODE_READY);
-                endpoint_send(e, p);
+                s_ptr *sp = shared_ptr_new(p);
+                endpoint_send(e, sp);
 			}
 		}
 	}

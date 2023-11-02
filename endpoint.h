@@ -1,6 +1,7 @@
 #include "timer.h"
 #include "protocol.h"
 #include "fifo.h"
+#include "shared_ptr.h"
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
@@ -35,7 +36,7 @@ struct endpoint_s
 
 	io_process process_send_cb;
 	int    send_state;
-	char  *send_buf_malloc;
+    char  *send_buf_malloc;
 	char  *send_buf;
 	size_t send_bytes;
 
@@ -106,7 +107,7 @@ struct endpoint
     int     send_state;
     sem_t   send_sem;
     int     send_locked_out;
-    char   *send_buf_malloc;
+    s_ptr  *send_buf_s_ptr;
     char   *send_buf;
     size_t  send_bytes;
     fifo_t *send_fifo;
@@ -167,7 +168,10 @@ endpoint *endpoint_new(int fd,
         int is_server);
 
 void endpoint_close(endpoint *e);
-void endpoint_send(endpoint *e, void *packet);
+void endpoint_send(endpoint *e, s_ptr *sp);
 int  endpoint_count(void);
 
+extern ele *el_head;
+void endpoint_list_lock(void);
+void endpoint_list_unlock(void);
 

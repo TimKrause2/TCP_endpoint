@@ -16,6 +16,8 @@ s_ptr *shared_ptr_new(void *data)
         return NULL;
     }
     p->N_ref = 1;
+    p->data = data;
+    //printf("shared_ptr_new: p:%p data:%p\n", p, data);
     return p;
 }
 
@@ -32,12 +34,13 @@ void shared_ptr_free(s_ptr *p)
     sem_wait(&p->sem);
     p->N_ref--;
     if(!p->N_ref){
+        //printf("shared_ptr_free: p:%p data:%p\n",p, p->data);
         sem_destroy(&p->sem);
         free(p->data);
         free(p);
-    }else{
-        sem_post(&p->sem);
+        return;
     }
+    sem_post(&p->sem);
 }
 
 void *shared_ptr_data(s_ptr *p)

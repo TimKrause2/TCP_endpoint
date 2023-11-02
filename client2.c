@@ -1,4 +1,5 @@
 #include "endpoint.h"
+#include "util.h"
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -11,13 +12,36 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#define N_BYTES_MIN 16*1024*1024
+#define N_BYTES_MAX 32*1024*1024
+#define SLEEP_MS_MIN 2000
+#define SLEEP_MS_MAX 4000
+
+struct client_s
+{
+    int state;
+};
+
+typedef struct client_s client;
+
+enum {
+    C_STATE_R_STATUS,
+    C_STATE_RECEIVE,
+    C_STATE_QUIT
+};
+
+client c;
+
 void process_packet_status(struct packet_status *ps, endpoint *e){
+    printf("process_packet_status:\n");
 	switch(ps->header.code){
 	case P_ST_CODE_READY:
+        c.state = C_STATE_RECEIVE;
 		break;
 	case P_ST_CODE_BUSY:
 		printf("server is busy\n");
-        exit(0);
+        c.state = C_STATE_QUIT;
+        endpoint_close(e);
 		break;
 	case P_ST_CODE_CONFIRM:
         printf("Confirm packet status.\n");
@@ -26,6 +50,7 @@ void process_packet_status(struct packet_status *ps, endpoint *e){
 }
 
 void process_packet_data(struct packet_data *pd, endpoint *e){
+    printf("process_packet_data:\n");
 	int nbytes = pd->header.length - sizeof(struct packet_common);
 	printf("data packet: nbytes:%d\n", nbytes);
 	if(nbytes>8)nbytes=8;
@@ -49,26 +74,12 @@ void process_packet(char *p, endpoint *e){
 }
 
 
-struct client_s
-{
-    int state;
-};
-
-typedef struct client_s client;
-
-enum {
-	C_STATE_R_STATUS,
-	C_STATE_RECEIVE,
-	C_STATE_QUIT
-};
-
 void client_recv_cb(void *packet, endpoint *e)
 {
-    client *c = e->recv_cb_arg;
-    switch(c->state){
+    //printf("client_recv_cb: packet:%p\n", packet);
+    switch(c.state){
     case C_STATE_R_STATUS:
         process_packet(packet, e);
-        c->state = C_STATE_RECEIVE;
         break;
     case C_STATE_RECEIVE:
         process_packet(packet, e);
@@ -90,6 +101,8 @@ int main( int argc, char *argv[] )
         exit(1);
     }
 
+    random_init();
+
     int sfd;
 	int result;
 	struct addrinfo hints;
@@ -103,13 +116,13 @@ int main( int argc, char *argv[] )
 	memset( &hints, 0, sizeof(hints) );
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
-	
+    printf("client2 main: calling getaddrinfo.\n");
 	result = getaddrinfo( argv[1], argv[2], &hints, &addrinfo_res );
 	if( result != 0 ){
 		printf("hostname lookup failed: %s\n", gai_strerror( result ) );
 		exit( 1 );
 	}
-	
+    printf("client2 main: getaddrinfo returned. calling socket\n");
 	sfd = socket( addrinfo_res->ai_family,
 				  addrinfo_res->ai_socktype,
 				  addrinfo_res->ai_protocol );
@@ -117,7 +130,7 @@ int main( int argc, char *argv[] )
 		perror( "socket" );
 		exit( 1 );
 	}
-	
+    printf("client2 main: socket returned. calling connect.\n");
 	result = connect( sfd, (const struct sockaddr*)addrinfo_res->ai_addr, addrinfo_res->ai_addrlen );
 	if( result == -1 ){
 		perror( "connect" );
@@ -131,17 +144,60 @@ int main( int argc, char *argv[] )
 
 	printf("connection established\n");
 
-    client c;
     c.state = C_STATE_R_STATUS;
     endpoint_new(sfd, client_recv_cb, (void*)&c, 0, 0);
+    int tests = 10;
+    while(c.state == C_STATE_R_STATUS && tests )
+    {
+        tests--;
+        millisleep(100);
+    }
+    if(c.state == C_STATE_R_STATUS){
+        printf("Didn't receive server connection status.\n");
+        exit(1);
+    }
+    if(c.state == C_STATE_QUIT){
+        printf("Server is busy.\n");
+        exit(1);
+    }
+    int do_loop = 1;
+    while(do_loop) {
+        int nbytes = random_range(N_BYTES_MIN, N_BYTES_MAX);
+        void *data = malloc(nbytes);
+        if(!data){
+            perror("client2 main: malloc");
+            continue;
+        }
 
-    while(endpoint_count()) {
-        sleep(1);
+
+        void *packet = packet_data_new(data, nbytes);
+        free(data);
+        if(!packet){
+            printf("client2 main: couldn't get a new data packet.\n");
+            continue;
+        }
+        s_ptr *sp = shared_ptr_new(packet);
+        if(!sp){
+            printf("client2 main: couldn't get a shared pointer.\n");
+            free(packet);
+            continue;
+        }
+        shared_ptr_alloc(sp);
+        endpoint_list_lock();
+        if(el_head){
+            //printf("client2 main: calling endpoint_send\n");
+            endpoint_send(el_head->e, sp);
+            //printf("client2 main: calling endpoint_send a second time.\n");
+            endpoint_send(el_head->e, sp);
+            //printf("client2 main: endpoint_send returned.\n");
+        }else{
+            shared_ptr_free(sp);
+            shared_ptr_free(sp);
+            do_loop = 0;
+        }
+        endpoint_list_unlock();
+        millisleep(random_range(SLEEP_MS_MIN, SLEEP_MS_MAX));
     }
 	
 	return 0;
 }
-	
-	
-	
-	
