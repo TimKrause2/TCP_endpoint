@@ -885,26 +885,26 @@ void process_send2(void *arg)
     if(e->send_state==SEND_ERROR){
         goto return_unlock;
     }
-    if(e->send_state==SEND_VERIFY){
-        //printf("process_send2: deleting e->cfd from interest list.\n");
-        int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL,
-                           e->cfd, NULL);
-        if(result==-1){
-            perror("process_send2:epoll_ctl(DEL cfd)");
-            //goto error_unlock;
-        }
-        s_ptr *sp = fifo_read(e->send_fifo);
-        if(sp){
-            e->send_buf_s_ptr = sp;
-            e->send_buf = shared_ptr_data(sp);
-            e->send_bytes = packet_length(e->send_buf);
-            e->send_state = SEND_READY;
-            goto procede_to_send;
-        }else{
-            e->send_state=SEND_OPEN;
-        }
-        goto return_unlock;
-    }
+//    if(e->send_state==SEND_VERIFY){
+//        //printf("process_send2: deleting e->cfd from interest list.\n");
+//        int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL,
+//                           e->cfd, NULL);
+//        if(result==-1){
+//            perror("process_send2:epoll_ctl(DEL cfd)");
+//            //goto error_unlock;
+//        }
+//        s_ptr *sp = fifo_read(e->send_fifo);
+//        if(sp){
+//            e->send_buf_s_ptr = sp;
+//            e->send_buf = shared_ptr_data(sp);
+//            e->send_bytes = packet_length(e->send_buf);
+//            e->send_state = SEND_READY;
+//            goto procede_to_send;
+//        }else{
+//            e->send_state=SEND_OPEN;
+//        }
+//        goto return_unlock;
+//    }
 procede_to_send:
     while(1){
 //		printf("process_send: send(%d, %p, %ld)\n",
@@ -934,24 +934,24 @@ procede_to_send:
             //printf("process_send2: send complete r=%ld\n", e->send_bytes);
             shared_ptr_free(e->send_buf_s_ptr);
             timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
-            if(e->send_state==SEND_READY){
-                //printf("process_send2: complete ADD e->cfd\n");
-                int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_ADD, e->cfd, &e->ev_cfd_w);
-                if(result==-1){
-                    perror("process_send2: epoll_ctl verify");
-                    //goto error_unlock;
-                }
-            }
             if(e->send_state==SEND_INPROGRESS){
                 //printf("process_send2: complete MOD e->cfd\n");
-                int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_MOD, e->cfd, &e->ev_cfd_w);
+                int result = epoll_ctl(send_epoll_fd, EPOLL_CTL_DEL, e->cfd, NULL);
                 if(result==-1){
                     perror("process_send2: epoll_ctl verify");
                     //goto error_unlock;
                 }
             }
-            e->send_state = SEND_VERIFY;
-            goto return_unlock;
+            s_ptr *sp = fifo_read(e->send_fifo);
+            if(sp){
+                e->send_buf_s_ptr = sp;
+                e->send_buf = shared_ptr_data(sp);
+                e->send_bytes = packet_length(e->send_buf);
+                e->send_state = SEND_READY;
+            }else{
+                e->send_state=SEND_OPEN;
+                goto return_unlock;
+            }
         }else{
             e->send_buf += r;
             e->send_bytes -= r;

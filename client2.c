@@ -33,7 +33,7 @@ enum {
 client c;
 
 void process_packet_status(struct packet_status *ps, endpoint *e){
-    printf("process_packet_status:\n");
+    //printf("process_packet_status:\n");
 	switch(ps->header.code){
 	case P_ST_CODE_READY:
         c.state = C_STATE_RECEIVE;
@@ -50,7 +50,7 @@ void process_packet_status(struct packet_status *ps, endpoint *e){
 }
 
 void process_packet_data(struct packet_data *pd, endpoint *e){
-    printf("process_packet_data:\n");
+    //printf("process_packet_data:\n");
 	int nbytes = pd->header.length - sizeof(struct packet_common);
 	printf("data packet: nbytes:%d\n", nbytes);
 	if(nbytes>8)nbytes=8;
