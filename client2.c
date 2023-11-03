@@ -32,9 +32,9 @@ enum {
 
 client c;
 
-void process_packet_status(struct packet_status *ps, endpoint *e){
+void process_packet_status(char *ps, endpoint *e){
     //printf("process_packet_status:\n");
-	switch(ps->header.code){
+    switch(packet_get_code(ps)){
 	case P_ST_CODE_READY:
         c.state = C_STATE_RECEIVE;
 		break;
@@ -49,25 +49,25 @@ void process_packet_status(struct packet_status *ps, endpoint *e){
 	}
 }
 
-void process_packet_data(struct packet_data *pd, endpoint *e){
+void process_packet_data(char *pd, endpoint *e){
     //printf("process_packet_data:\n");
-	int nbytes = pd->header.length - sizeof(struct packet_common);
+    int nbytes = packet_data_get_nbytes(pd);
 	printf("data packet: nbytes:%d\n", nbytes);
+    char *data = packet_data_get_data(pd);
 	if(nbytes>8)nbytes=8;
 	for(int b=0;b<nbytes;b++){
-		printf("%02hhX",pd->data[b]);
+        printf("%02hhX",data[b]);
 	}
 	printf("\n");
 }
 
 void process_packet(char *p, endpoint *e){
-	struct packet_common *header = (struct packet_common *)p;
-	switch(header->type){
+    switch(packet_get_type(p)){
 	case P_STATUS:
-		process_packet_status((struct packet_status*)p, e);
+        process_packet_status(p, e);
 		break;
 	case P_DATA:
-		process_packet_data((struct packet_data*)p, e);
+        process_packet_data(p, e);
 		break;
 	}
 	free(p);
@@ -176,6 +176,7 @@ int main( int argc, char *argv[] )
             printf("client2 main: couldn't get a new data packet.\n");
             continue;
         }
+        printf("client2 main: new packet nbytes=%d\n", nbytes);
         s_ptr *sp = shared_ptr_new(packet);
         if(!sp){
             printf("client2 main: couldn't get a shared pointer.\n");

@@ -5,10 +5,12 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
+#define _GNU_SOURCE
 #define __USE_GNU
 #include <sys/socket.h>
 #include <openssl/ssl.h>
 #include <semaphore.h>
+#include <time.h>
 
 typedef struct endpoint_s endpoint_t;
 typedef void (*loop_func_ptr)(endpoint_t *, void *);
@@ -73,7 +75,8 @@ enum {
 
 enum {
 	RECV_HEADER,
-	RECV_INPROGRESS,
+    RECV_INPROGRESS,
+    RECV_DISCARD,
 	RECV_ERROR
 };
 
@@ -96,6 +99,7 @@ struct endpoint
 {
     int cfd;
     struct sockaddr_storage peer_addr;
+    struct timespec init_ts;
     sem_t  sem;
     int locked_out;
 

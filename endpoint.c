@@ -1,7 +1,6 @@
 #include "endpoint.h"
 #define __USE_GNU
 #include <sys/types.h>
-#define _GNU_SOURCE
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -262,141 +261,141 @@ void process_send(void *arg)
 	}
 }
 
-void process_recv_ssl(void *arg)
-{
-    endpoint_t *e = (endpoint_t*)arg;
-	int r;
-	int err;
-	struct packet_common header;
-	for(;;){
-		switch(e->recv_state){
-		case RECV_HEADER:
-			r = SSL_peek(e->ssl, &header, sizeof(header));
-			if(r<=0){
-				err = SSL_get_error(e->ssl, r);
-				if(err==SSL_ERROR_WANT_READ){
-					return;
-				}else{
-					SSL_perror("process_recv_ssl:SSL_peek error",
-									e->ssl, r);
-					e->recv_state = RECV_ERROR;
-					return;
-				}
-			}else if(r == sizeof(header)){
-				e->recv_buf_malloc = e->recv_buf = malloc(header.length);
-				if(!e->recv_buf){
-					perror("process_recv_ssl:malloc");
-					e->recv_state = RECV_ERROR;
-					return;
-				}
-				e->recv_bytes = header.length;
-				e->recv_state = RECV_INPROGRESS;
-			}
-			break;
-		case RECV_INPROGRESS:
-			r = SSL_read(e->ssl, e->recv_buf, e->recv_bytes);
-			if(r<=0){
-				err = SSL_get_error(e->ssl, r);
-				if(err==SSL_ERROR_WANT_READ){
-					return;
-				}else{
-					printf("proces_recv_ssl:SSL_read error:%d\n",err);
-					free(e->recv_buf_malloc);
-					e->recv_state = RECV_ERROR;
-					return;
-				}
-			}else if(r == e->recv_bytes){
-				write(e->recv_pipe[1], &e->recv_buf_malloc, sizeof(void*));
-                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
-				e->recv_state = RECV_HEADER;
-				return;
-			}else{
-				e->recv_buf += r;
-				e->recv_bytes -= r;
-                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
-			}
-			break;
-		case RECV_ERROR:
-			return;
-		}
-	}
-}
+//void process_recv_ssl(void *arg)
+//{
+//    endpoint_t *e = (endpoint_t*)arg;
+//	int r;
+//	int err;
+//	struct packet_common header;
+//	for(;;){
+//		switch(e->recv_state){
+//		case RECV_HEADER:
+//			r = SSL_peek(e->ssl, &header, sizeof(header));
+//			if(r<=0){
+//				err = SSL_get_error(e->ssl, r);
+//				if(err==SSL_ERROR_WANT_READ){
+//					return;
+//				}else{
+//					SSL_perror("process_recv_ssl:SSL_peek error",
+//									e->ssl, r);
+//					e->recv_state = RECV_ERROR;
+//					return;
+//				}
+//			}else if(r == sizeof(header)){
+//				e->recv_buf_malloc = e->recv_buf = malloc(header.length);
+//				if(!e->recv_buf){
+//					perror("process_recv_ssl:malloc");
+//					e->recv_state = RECV_ERROR;
+//					return;
+//				}
+//				e->recv_bytes = header.length;
+//				e->recv_state = RECV_INPROGRESS;
+//			}
+//			break;
+//		case RECV_INPROGRESS:
+//			r = SSL_read(e->ssl, e->recv_buf, e->recv_bytes);
+//			if(r<=0){
+//				err = SSL_get_error(e->ssl, r);
+//				if(err==SSL_ERROR_WANT_READ){
+//					return;
+//				}else{
+//					printf("proces_recv_ssl:SSL_read error:%d\n",err);
+//					free(e->recv_buf_malloc);
+//					e->recv_state = RECV_ERROR;
+//					return;
+//				}
+//			}else if(r == e->recv_bytes){
+//				write(e->recv_pipe[1], &e->recv_buf_malloc, sizeof(void*));
+//                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+//				e->recv_state = RECV_HEADER;
+//				return;
+//			}else{
+//				e->recv_buf += r;
+//				e->recv_bytes -= r;
+//                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+//			}
+//			break;
+//		case RECV_ERROR:
+//			return;
+//		}
+//	}
+//}
 
-void process_recv(void *arg)
-{
-    endpoint_t *e = (endpoint_t*)arg;
-    ssize_t r;
-	while(1){
-		if(e->recv_state==RECV_HEADER){
-			struct packet_common header;
-			r = recv(e->cfd, &header, sizeof(header), MSG_PEEK);
-			if(r==-1){
-				perror("process_recv:recv(MSG_PEEK)");
-				e->recv_state = RECV_ERROR;
-				return;
-			}
-			if (r==0){
-				printf("process_recv:connection lost\n");
-				e->recv_state = RECV_ERROR;
-				return;
-			}
-			e->recv_buf_malloc = e->recv_buf = malloc(header.length);
-			if(!e->recv_buf){
-				perror("process_recv:malloc");
-				e->recv_state = RECV_ERROR;
-				return;
-			}
-			e->recv_bytes = header.length;
-			e->recv_state = RECV_INPROGRESS;
-		}else if(e->recv_state==RECV_INPROGRESS){
-			r = recv(e->cfd, e->recv_buf, e->recv_bytes, 0);
-			if(r==-1){
-				switch(errno){
-				case EAGAIN:
-#if EAGAIN != EWOULDBLOCK
-				case EWOULDBLOCK:
-#endif
-					return;
-				default:
-					perror("process_recv:recv");
-                    printf("errno:%d\n",errno);
-                    e->recv_state = RECV_ERROR;
-					free(e->recv_buf_malloc);
-					return;
-				}
-			}else if(r == e->recv_bytes){
-				e->recv_state = RECV_HEADER;
-				write(e->recv_pipe[1], &e->recv_buf_malloc, sizeof(void*));
-                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
-				return;
-			}else if(r == 0){
-				free(e->recv_buf_malloc);
-				e->recv_state = RECV_ERROR;
-				return;
-			}else{
-				e->recv_buf += r;
-				e->recv_bytes -= r;
-                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
-			}
-		}else if(e->recv_state==RECV_ERROR){
-			return;
-		}
-	}
-}
+//void process_recv(void *arg)
+//{
+//    endpoint_t *e = (endpoint_t*)arg;
+//    ssize_t r;
+//	while(1){
+//		if(e->recv_state==RECV_HEADER){
+//			struct packet_common header;
+//			r = recv(e->cfd, &header, sizeof(header), MSG_PEEK);
+//			if(r==-1){
+//				perror("process_recv:recv(MSG_PEEK)");
+//				e->recv_state = RECV_ERROR;
+//				return;
+//			}
+//			if (r==0){
+//				printf("process_recv:connection lost\n");
+//				e->recv_state = RECV_ERROR;
+//				return;
+//			}
+//			e->recv_buf_malloc = e->recv_buf = malloc(header.length);
+//			if(!e->recv_buf){
+//				perror("process_recv:malloc");
+//				e->recv_state = RECV_ERROR;
+//				return;
+//			}
+//			e->recv_bytes = header.length;
+//			e->recv_state = RECV_INPROGRESS;
+//		}else if(e->recv_state==RECV_INPROGRESS){
+//			r = recv(e->cfd, e->recv_buf, e->recv_bytes, 0);
+//			if(r==-1){
+//				switch(errno){
+//				case EAGAIN:
+//#if EAGAIN != EWOULDBLOCK
+//				case EWOULDBLOCK:
+//#endif
+//					return;
+//				default:
+//					perror("process_recv:recv");
+//                    printf("errno:%d\n",errno);
+//                    e->recv_state = RECV_ERROR;
+//					free(e->recv_buf_malloc);
+//					return;
+//				}
+//			}else if(r == e->recv_bytes){
+//				e->recv_state = RECV_HEADER;
+//				write(e->recv_pipe[1], &e->recv_buf_malloc, sizeof(void*));
+//                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+//				return;
+//			}else if(r == 0){
+//				free(e->recv_buf_malloc);
+//				e->recv_state = RECV_ERROR;
+//				return;
+//			}else{
+//				e->recv_buf += r;
+//				e->recv_bytes -= r;
+//                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+//			}
+//		}else if(e->recv_state==RECV_ERROR){
+//			return;
+//		}
+//	}
+//}
 
-void process_send_pipe(void *arg)
-{
-    endpoint_t *e = (endpoint_t*)arg;
-    ssize_t r = read(e->send_pipe[0], &e->send_buf_malloc, sizeof(void*));
-    if(r==-1){
-        perror("process_send_pipe:read(send_pipe[0])");
-        return;
-    }
-    e->send_buf = e->send_buf_malloc;
-    struct packet_common *header = (struct packet_common*)e->send_buf_malloc;
-    e->send_bytes = header->length;
-    e->process_send_cb(e);
-}
+//void process_send_pipe(void *arg)
+//{
+//    endpoint_t *e = (endpoint_t*)arg;
+//    ssize_t r = read(e->send_pipe[0], &e->send_buf_malloc, sizeof(void*));
+//    if(r==-1){
+//        perror("process_send_pipe:read(send_pipe[0])");
+//        return;
+//    }
+//    e->send_buf = e->send_buf_malloc;
+//    struct packet_common *header = (struct packet_common*)e->send_buf_malloc;
+//    e->send_bytes = header->length;
+//    e->process_send_cb(e);
+//}
 
 void process_term(void *arg)
 {
@@ -495,178 +494,178 @@ void *io_routine(void *arg){
 	}
 }
 
-void endpoint_process(
-		int cfd,
-		loop_func_ptr loop_func,
-		void *loop_func_arg,
-		int ssl_enable,
-		int server)
-{
-    ignore_sigpipe();
-	endpoint_t *e;
-	e = malloc(sizeof(endpoint_t));
-	if(!e)return;
-	e->cfd = cfd;
-	e->send_state = SEND_READY;
-	e->recv_state = RECV_HEADER;
+//void endpoint_process(
+//		int cfd,
+//		loop_func_ptr loop_func,
+//		void *loop_func_arg,
+//		int ssl_enable,
+//		int server)
+//{
+//    ignore_sigpipe();
+//	endpoint_t *e;
+//	e = malloc(sizeof(endpoint_t));
+//	if(!e)return;
+//	e->cfd = cfd;
+//	e->send_state = SEND_READY;
+//	e->recv_state = RECV_HEADER;
 
-	memset(&e->ev_cfd_r, 0, sizeof(struct epoll_event));
-	memset(&e->ev_cfd_rw, 0, sizeof(struct epoll_event));
-	memset(&e->ev_send, 0, sizeof(struct epoll_event));
-	memset(&e->ev_term, 0, sizeof(struct epoll_event));
+//	memset(&e->ev_cfd_r, 0, sizeof(struct epoll_event));
+//	memset(&e->ev_cfd_rw, 0, sizeof(struct epoll_event));
+//	memset(&e->ev_send, 0, sizeof(struct epoll_event));
+//	memset(&e->ev_term, 0, sizeof(struct epoll_event));
 
-	if(ssl_enable){
-		e->ssl_enable = 1;
-		e->process_recv_cb = process_recv_ssl;
-		e->process_send_cb = process_send_ssl;
-		if(server){
-			e->server = 1;
-			e->ssl_ctx = SSL_CTX_new(TLS_server_method());
-			if(!e->ssl_ctx){
-				SSL_print_error("SSL_CTX_new");
-				return;
-			}
+//	if(ssl_enable){
+//		e->ssl_enable = 1;
+//		e->process_recv_cb = process_recv_ssl;
+//		e->process_send_cb = process_send_ssl;
+//		if(server){
+//			e->server = 1;
+//			e->ssl_ctx = SSL_CTX_new(TLS_server_method());
+//			if(!e->ssl_ctx){
+//				SSL_print_error("SSL_CTX_new");
+//				return;
+//			}
 
-			int result = SSL_CTX_use_certificate_chain_file(
-						e->ssl_ctx,
-						"fullchain.pem");
-			if(result!=1){
-				SSL_print_error("SSL_CTX_use_certificate_chain_file");
-				return;
-			}
+//			int result = SSL_CTX_use_certificate_chain_file(
+//						e->ssl_ctx,
+//						"fullchain.pem");
+//			if(result!=1){
+//				SSL_print_error("SSL_CTX_use_certificate_chain_file");
+//				return;
+//			}
 
-			result = SSL_CTX_use_PrivateKey_file(
-						e->ssl_ctx,
-						"privkey.pem",
-						SSL_FILETYPE_PEM);
-			if(result!=1){
-				SSL_print_error("SSL_CTX_use_PrivateKey_file");
-				return;
-			}
+//			result = SSL_CTX_use_PrivateKey_file(
+//						e->ssl_ctx,
+//						"privkey.pem",
+//						SSL_FILETYPE_PEM);
+//			if(result!=1){
+//				SSL_print_error("SSL_CTX_use_PrivateKey_file");
+//				return;
+//			}
 
-			e->ssl = SSL_new(e->ssl_ctx);
-			if(!e->ssl){
-				SSL_print_error("SSL_new");
-				return;
-			}
+//			e->ssl = SSL_new(e->ssl_ctx);
+//			if(!e->ssl){
+//				SSL_print_error("SSL_new");
+//				return;
+//			}
 
-			result = SSL_set_fd(e->ssl, e->cfd);
-			if(result=0){
-				SSL_print_error("SSL_set_fd");
-				return;
-			}
+//			result = SSL_set_fd(e->ssl, e->cfd);
+//			if(result=0){
+//				SSL_print_error("SSL_set_fd");
+//				return;
+//			}
 
-			socket_set_nonblock(e->cfd, 0);
+//			socket_set_nonblock(e->cfd, 0);
 
-			result = SSL_accept(e->ssl);
-			if(result<=0){
-				SSL_perror("SSL_accept", e->ssl, result );
-				return;
-			}
+//			result = SSL_accept(e->ssl);
+//			if(result<=0){
+//				SSL_perror("SSL_accept", e->ssl, result );
+//				return;
+//			}
 
-			socket_set_nonblock(e->cfd, 1);
-		}else{
-			e->server = 0;
-			e->ssl_ctx = SSL_CTX_new(TLS_client_method());
-			if(!e->ssl_ctx){
-				SSL_print_error("SSL_CTX_new");
-				return;
-			}
+//			socket_set_nonblock(e->cfd, 1);
+//		}else{
+//			e->server = 0;
+//			e->ssl_ctx = SSL_CTX_new(TLS_client_method());
+//			if(!e->ssl_ctx){
+//				SSL_print_error("SSL_CTX_new");
+//				return;
+//			}
 
-			e->ssl = SSL_new(e->ssl_ctx);
-			if(!e->ssl){
-				SSL_print_error("SSL_new");
-				return;
-			}
+//			e->ssl = SSL_new(e->ssl_ctx);
+//			if(!e->ssl){
+//				SSL_print_error("SSL_new");
+//				return;
+//			}
 
-			int result = SSL_set_fd(e->ssl, e->cfd);
-			if(result==0){
-				SSL_print_error("SSL_set_fd");
-				return;
-			}
+//			int result = SSL_set_fd(e->ssl, e->cfd);
+//			if(result==0){
+//				SSL_print_error("SSL_set_fd");
+//				return;
+//			}
 
-			socket_set_nonblock(e->cfd, 0);
+//			socket_set_nonblock(e->cfd, 0);
 
-			result = SSL_connect(e->ssl);
-			if(result<=0){
-				SSL_perror("SSL_connect",e->ssl,result);
-				return;
-			}
+//			result = SSL_connect(e->ssl);
+//			if(result<=0){
+//				SSL_perror("SSL_connect",e->ssl,result);
+//				return;
+//			}
 
-			socket_set_nonblock(e->cfd, 1);
-		}
-	}else{
-		e->ssl_enable = 0;
-		e->process_recv_cb = process_recv;
-		e->process_send_cb = process_send;
-	}
+//			socket_set_nonblock(e->cfd, 1);
+//		}
+//	}else{
+//		e->ssl_enable = 0;
+//		e->process_recv_cb = process_recv;
+//		e->process_send_cb = process_send;
+//	}
 
-	int r;
-	r = pipe(e->send_pipe);
-	if(r<0){
-		perror("process_connection:pipe(send_pipe)");
-		return;
-	}
+//	int r;
+//	r = pipe(e->send_pipe);
+//	if(r<0){
+//		perror("process_connection:pipe(send_pipe)");
+//		return;
+//	}
 
-	r = pipe(e->recv_pipe);
-	if(r<0){
-		perror("process_connection:pipe(recv_pipe)");
-		return;
-	}
+//	r = pipe(e->recv_pipe);
+//	if(r<0){
+//		perror("process_connection:pipe(recv_pipe)");
+//		return;
+//	}
 
-	r = pipe(e->term_pipe);
-	if(r<0){
-		perror("process_connection:pipe(term_pipe)");
-		return;
-	}
+//	r = pipe(e->term_pipe);
+//	if(r<0){
+//		perror("process_connection:pipe(term_pipe)");
+//		return;
+//	}
 
-    e->send_timer = timer_new(send_timer_cb, e);
-    if(!e->send_timer){
-        printf("Problem obtaining send_timer.\n");
-        return;
-    }
+//    e->send_timer = timer_new(send_timer_cb, e);
+//    if(!e->send_timer){
+//        printf("Problem obtaining send_timer.\n");
+//        return;
+//    }
 
-    e->recv_timer = timer_new(recv_timer_cb, e);
-    if(!e->recv_timer){
-        printf("Problem obtaining recv_timer.\n");
-        return;
-    }
-    timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
-    timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+//    e->recv_timer = timer_new(recv_timer_cb, e);
+//    if(!e->recv_timer){
+//        printf("Problem obtaining recv_timer.\n");
+//        return;
+//    }
+//    timer_set(e->send_timer, CONFIRM_TIMEOUT_S);
+//    timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
 
-    e->ev_cfd_r.data.ptr = &e->ed_cfd;
-    e->ev_cfd_rw.data.ptr = &e->ed_cfd;
-	e->ev_cfd_r.events = EPOLLIN;
-	e->ev_cfd_rw.events = EPOLLIN | EPOLLOUT;
-    e->ev_send.data.ptr = &e->ed_send;
-	e->ev_send.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    e->ev_term.data.ptr = &e->ed_term;
-	e->ev_term.events = EPOLLIN;
+//    e->ev_cfd_r.data.ptr = &e->ed_cfd;
+//    e->ev_cfd_rw.data.ptr = &e->ed_cfd;
+//	e->ev_cfd_r.events = EPOLLIN;
+//	e->ev_cfd_rw.events = EPOLLIN | EPOLLOUT;
+//    e->ev_send.data.ptr = &e->ed_send;
+//	e->ev_send.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+//    e->ev_term.data.ptr = &e->ed_term;
+//	e->ev_term.events = EPOLLIN;
 
-    e->ed_cfd.arg = e;
-    e->ed_cfd.in_cb = e->process_recv_cb;
-    e->ed_cfd.out_cb = e->process_send_cb;
-    e->ed_send.arg = e;
-    e->ed_send.in_cb = process_send_pipe;
-    e->ed_send.out_cb = NULL;
-    e->ed_term.arg = e;
-    e->ed_term.in_cb = process_term;
-    e->ed_term.out_cb = NULL;
+//    e->ed_cfd.arg = e;
+//    e->ed_cfd.in_cb = e->process_recv_cb;
+//    e->ed_cfd.out_cb = e->process_send_cb;
+//    e->ed_send.arg = e;
+//    e->ed_send.in_cb = process_send_pipe;
+//    e->ed_send.out_cb = NULL;
+//    e->ed_term.arg = e;
+//    e->ed_term.in_cb = process_term;
+//    e->ed_term.out_cb = NULL;
 
-    e->io_terminate = 0;
+//    e->io_terminate = 0;
 
-    r = pthread_create(&e->io_thread, NULL, io_routine, (void*)e);
-	if(r!=0){
-		errno = r;
-		perror("pthread_create");
-		return;
-	}
+//    r = pthread_create(&e->io_thread, NULL, io_routine, (void*)e);
+//	if(r!=0){
+//		errno = r;
+//		perror("pthread_create");
+//		return;
+//	}
 
-	loop_func(e, loop_func_arg);
+//	loop_func(e, loop_func_arg);
 
-	pthread_join(e->io_thread, NULL);
+//	pthread_join(e->io_thread, NULL);
 
-}
+//}
 
 /***********************************************************************
  *
@@ -927,7 +926,7 @@ void process_send2(void *arg)
             if(sp){
                 e->send_buf_s_ptr = sp;
                 e->send_buf = shared_ptr_data(sp);
-                e->send_bytes = packet_length(e->send_buf);
+                e->send_bytes = packet_get_length(e->send_buf);
                 e->send_state = SEND_READY;
             }else{
                 e->send_state=SEND_OPEN;
@@ -950,6 +949,10 @@ return_unlock:
     sem_post(&e->send_sem);
 }
 
+#define DISCARD_BUF_SIZE (64*1024)
+char discard_buf[DISCARD_BUF_SIZE];
+
+
 void process_recv2(void *arg)
 {
     endpoint *e = (endpoint*)arg;
@@ -965,8 +968,8 @@ void process_recv2(void *arg)
     ssize_t r;
     while(1) {
         if(e->recv_state==RECV_HEADER){
-            struct packet_common header;
-            r = recv(e->cfd, &header, sizeof(header), MSG_PEEK);
+            char header[SIZEOF_PACKET_COMMON];
+            r = recv(e->cfd, &header, SIZEOF_PACKET_COMMON, MSG_PEEK);
             if(r==-1){
                 if(errno==EAGAIN || errno==EWOULDBLOCK){
                     goto normal_return;
@@ -974,25 +977,33 @@ void process_recv2(void *arg)
                 perror("process_recv:recv(MSG_PEEK)");
                 printf("errno:%d\n",errno);
                 goto error_return;
-            }
-            if (r==0){
-                printf("process_recv:connection lost\n");
+            }else if (r==0){
+                printf("process_recv2: RECV_HEADER connection lost\n");
                 goto error_return;
+            }else if(r == SIZEOF_PACKET_COMMON){
+                if(!packet_ok(header)){
+                    printf("process_recv2: malformed packet header. Assuming garbage.\n");
+                    goto error_return;
+                }
+                e->recv_bytes = packet_get_length(header);
+                //printf("process_recv2: RECV_HEADER                       e->recv_bytes:%ld\n", e->recv_bytes);
+                e->recv_buf_malloc = e->recv_buf = malloc(e->recv_bytes);
+                if(!e->recv_buf){
+                    perror("process_recv2:malloc packet discarded");
+                    e->recv_state = RECV_DISCARD;
+                }else{
+                    e->recv_state = RECV_INPROGRESS;
+                }
+            }else{
+                goto normal_return;
             }
-            e->recv_buf_malloc = e->recv_buf = malloc(header.length);
-            if(!e->recv_buf){
-                perror("process_recv:malloc");
-                goto error_return;
-            }
-            e->recv_bytes = header.length;
-            e->recv_state = RECV_INPROGRESS;
         }else if(e->recv_state==RECV_INPROGRESS){
             r = recv(e->cfd, e->recv_buf, e->recv_bytes, 0);
             if(r==-1){
                 if(errno==EAGAIN || errno==EWOULDBLOCK){
                     goto normal_return;
                 }else{
-                    perror("process_recv:recv");
+                    perror("process_recv2: RECV_INPROGRESS recv");
                     printf("errno:%d\n",errno);
                     free(e->recv_buf_malloc);
                     goto error_return;
@@ -1003,12 +1014,38 @@ void process_recv2(void *arg)
                 packet = e->recv_buf_malloc;
                 goto normal_return;
             }else if(r == 0){
+                printf("process_recv2: RECV_INPROGRESS connection lost\n");
                 free(e->recv_buf_malloc);
                 goto error_return;
             }else{
                 e->recv_buf += r;
                 e->recv_bytes -= r;
                 timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+            }
+        }else if(e->recv_state == RECV_DISCARD){
+            //printf("process_recv2: executing RECV_DISCARD state.\n");
+            size_t recv_nbytes = (e->recv_bytes > DISCARD_BUF_SIZE)?DISCARD_BUF_SIZE:e->recv_bytes;
+            r = recv(e->cfd, discard_buf, recv_nbytes, 0);
+            //printf("process_recv2: recv = %ld\n", r);
+            if(r==-1){
+                if(errno==EAGAIN || errno==EWOULDBLOCK){
+                    //printf("process_recv2: RECV_DISCARD EAGAIN\n");
+                    goto normal_return;
+                }else{
+                    perror("process_recv2: RECV_DISCARD recv");
+                    goto error_return;
+                }
+            }else if(r==0){
+                printf("process_recv2: RECV_DISCARD connection lost\n");
+                goto error_return;
+            }else{
+                timer_set(e->recv_timer, WATCHDOG_TIMEOUT_S);
+                e->recv_bytes -= r;
+                if(!e->recv_bytes){
+                    //printf("process_recv2: RECV_DISCARD packet complete.\n");
+                    e->recv_state = RECV_HEADER;
+                    continue;
+                }
             }
         }else if(e->recv_state==RECV_ERROR){
             goto normal_return;
@@ -1143,16 +1180,17 @@ int endpoint_accept(endpoint *e, int sfd){
     int cfd;
     socklen_t peer_addr_size;
     peer_addr_size = sizeof(e->peer_addr);
-    cfd = accept4(sfd,
+    cfd = accept(sfd,
                   (struct sockaddr*)&e->peer_addr,
-                  &peer_addr_size,
-                  SOCK_NONBLOCK);
+                  &peer_addr_size);
     if(cfd==-1){
         perror("endpoint_accept: accept4");
         return cfd;
     }
 
     printf("endpoint_accept: connection accepted cfd=%d\n",cfd);
+
+    socket_set_nonblock(cfd, 1);
 
     if(e->peer_addr.ss_family==AF_INET){
         struct sockaddr_in *peer_addr = (struct sockaddr_in*)&e->peer_addr;
@@ -1189,6 +1227,11 @@ endpoint* endpoint_new(int fd,
         return NULL;
     }
 
+    result = clock_gettime(CLOCK_REALTIME, &e->init_ts);
+    if(result==-1){
+        perror("endpoint_new: clock_gettime");
+    }
+    
     // initialize the object
     e->send_timer = timer_new(send_expire_cb, e);
     if(!e->send_timer){
@@ -1267,7 +1310,6 @@ endpoint* endpoint_new(int fd,
         printf("endpoint_new: endpoint_list_push failed.\n");
         goto error_cfd;
     }
-
 
     // initailize SSL if requested
 
@@ -1385,7 +1427,7 @@ void endpoint_send(endpoint *e, s_ptr *sp)
             e->send_state = SEND_READY;
             e->send_buf_s_ptr = sp;
             e->send_buf = shared_ptr_data(sp);
-            e->send_bytes = packet_length(e->send_buf);
+            e->send_bytes = packet_get_length(e->send_buf);
             sem_post(&e->send_sem);
             //process_send2(e);
             epoll_ctl(send_epoll_fd, EPOLL_CTL_MOD, e->cfd, &e->ev_cfd_w);

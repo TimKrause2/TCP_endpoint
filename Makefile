@@ -2,7 +2,7 @@ LDFLAGS= -pthread -ggdb
 LDLIBS=-lrt -lssl -lcrypto -lm
 CFLAGS= -pthread -ggdb
 
-all: server client server2 client2
+all: server2 client2
 
 server2:server2.o protocol.o timer.o endpoint.o fifo.o shared_ptr.o
 

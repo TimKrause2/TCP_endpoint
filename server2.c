@@ -34,8 +34,8 @@ struct shm_data
 	int N_children;
 };
 
-void process_packet_status(struct packet_status *ps){
-	switch(ps->header.code){
+void process_packet_status(char *packet){
+    switch(packet_get_code(packet)){
 	case P_ST_CODE_READY:
 		break;
 	case P_ST_CODE_BUSY:
@@ -45,7 +45,7 @@ void process_packet_status(struct packet_status *ps){
         printf("Confirm packet status.\n");
 		break;
 	}
-    free(ps);
+    free(packet);
 }
 
 typedef struct endpoint_send_element ese;
@@ -90,12 +90,14 @@ void es_call(s_ptr *sp)
     es_tail = NULL;
 }
 
-void process_packet_data(struct packet_data *pd){
-	int nbytes = pd->header.length - sizeof(struct packet_common);
+void process_packet_data(char *pd)
+{
+    int nbytes = packet_data_get_nbytes(pd);
     printf("data packet: nbytes:%d\n",nbytes);
+    char *data = (char*)packet_data_get_data(pd);
     if(nbytes>8)nbytes=8;
 	for(int b=0;b<nbytes;b++){
-		printf("%02hhX",pd->data[b]);
+        printf("%02hhX",data[b]);
 	}
 	printf("\n");
     //free(pd);
@@ -119,13 +121,12 @@ void process_packet_data(struct packet_data *pd){
 }
 
 void process_packet(char *p){
-	struct packet_common *header = (struct packet_common *)p;
-	switch(header->type){
+    switch(packet_get_type(p)){
 	case P_STATUS:
-		process_packet_status((struct packet_status*)p);
+        process_packet_status(p);
 		break;
 	case P_DATA:
-		process_packet_data((struct packet_data*)p);
+        process_packet_data(p);
 		break;
 	}
 }
