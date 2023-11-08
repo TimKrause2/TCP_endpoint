@@ -1,7 +1,9 @@
 #include "endpoint.h"
+#include "util.h"
 #define __USE_GNU
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -22,17 +24,15 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <time.h>
 
 #define ENDPOINTS_MAX 10
 #define LISTEN_BACKLOG 10
 #define N_SEND_THREADS 2
 #define N_RECV_THREADS 2
+#define SOCKET_PATH "\0tims.server.socket"
 
-struct shm_data
-{
-	sem_t sem;
-	int N_children;
-};
+struct timespec server_ts;
 
 void process_packet_status(char *packet){
     switch(packet_get_code(packet)){
@@ -46,48 +46,6 @@ void process_packet_status(char *packet){
 		break;
 	}
     free(packet);
-}
-
-typedef struct endpoint_send_element ese;
-
-struct endpoint_send_element
-{
-    endpoint *e;
-    ese *next;
-};
-
-ese *es_head = NULL;
-ese *es_tail = NULL;
-
-ese *es_new(endpoint *e)
-{
-    ese *es = malloc(sizeof(ese));
-    if(!es)
-        return NULL;
-    es->e = e;
-    if(!es_head){
-        es_head = es;
-        es_tail = es;
-        es->next = NULL;
-    }else{
-        es_tail->next = es;
-        es_tail = es;
-        es->next = NULL;
-    }
-    return es;
-}
-
-void es_call(s_ptr *sp)
-{
-    ese *es = es_head;
-    while(es){
-        endpoint_send(es->e, sp);
-        ese *esf = es;
-        es = es->next;
-        free(esf);
-    }
-    es_head = NULL;
-    es_tail = NULL;
 }
 
 void process_packet_data(char *pd)
@@ -113,7 +71,8 @@ void process_packet_data(char *pd)
     endpoint_list_lock();
     ele *le = el_head;
     while(le){
-        endpoint_send(le->e, shared_ptr_alloc(sp));
+        if(le->e->peer_addr.ss_family!=AF_UNIX)
+            endpoint_send(le->e, shared_ptr_alloc(sp));
         le = le->next;
     }
     endpoint_list_unlock();
@@ -137,8 +96,102 @@ void server_recv_cb(void *packet, endpoint *e)
     process_packet(packet);
 }
 
+#define PACKETS_P_ENDPOINT 500000
+
+
+void send_endpoint_list(endpoint *e)
+{
+    printf("send_endpoint_list: start\n");
+    endpoint_list_lock();
+    char *si_packet = packet_server_info_new(&server_ts, endpoint_count()*PACKETS_P_ENDPOINT);
+    if(!si_packet){
+        goto unlock_return;
+    }
+    s_ptr *si_sp = shared_ptr_new(si_packet);
+    if(!si_sp){
+        free(si_packet);
+        goto unlock_return;
+    }
+    endpoint_send(e, si_sp);
+
+    ele *le = el_head;
+    while(le){
+        endpoint *et = le->e;
+
+        for(int i=0;i<PACKETS_P_ENDPOINT;i++)
+        {
+            char *ep_packet = packet_endpoint_info_new(
+                        &et->peer_addr,
+                        &et->init_ts,
+                        et->send_sent,
+                        et->recv_received,
+                        et->recv_discarded);
+            if(!ep_packet){
+                continue;
+            }
+            s_ptr *ep_sp = shared_ptr_new(ep_packet);
+            if(!ep_sp){
+                free(ep_packet);
+                continue;
+            }
+            endpoint_send(e, ep_sp);
+        }
+        le = le->next;
+    }
+unlock_return:
+    endpoint_list_unlock();
+    printf("send_endpoint_list: exiting\n");
+}
+
+void server_recv_unix_cb(void *packet, endpoint *e)
+{
+    if(packet_get_type(packet) == P_COMMAND
+            && packet_get_code(packet) == P_CMD_CODE_ENDPOINT_LIST){
+        send_endpoint_list(e);
+    }
+    free(packet);
+}
+
+void server_endpoint_new(int sfd)
+{
+    endpoint *e = endpoint_new(
+                sfd,
+                server_recv_cb, NULL, 0, 1);
+    void *p;
+    if(endpoint_count()>ENDPOINTS_MAX)
+        p = packet_status_new(P_ST_CODE_BUSY);
+    else
+        p = packet_status_new(P_ST_CODE_READY);
+    s_ptr *sp = shared_ptr_new(p);
+    endpoint_send(e, sp);
+}
+
+void unix_endpoint_new(int sfd)
+{
+    endpoint *e = endpoint_new(
+                sfd,
+                server_recv_unix_cb, NULL, 0, 1);
+}
+
+typedef struct server_epoll_dispatch svr_ed;
+
+struct server_epoll_dispatch
+{
+    int sfd;
+    void (*endpoint_new)(int sfd);
+};
+
 int main( int argc, char *argv[] )
 {
+    int result;
+    int r;
+
+    r = clock_gettime(CLOCK_REALTIME, &server_ts);
+    if(r==-1){
+        perror("main: clock_gettime");
+        printf("Couldn't get the server initialization time.\n");
+    }
+
     if(!timer_init()){
         printf("Couldn't initialize the timer subsystem.\n");
         exit(1);
@@ -150,24 +203,11 @@ int main( int argc, char *argv[] )
     }
 
     int sfd;
-	int result;
 	struct addrinfo hints;
 	struct addrinfo *ai_res;
 	struct addrinfo *ai_ptr;
 	int N_l_sockets=0;
-	struct pollfd *pollfds;
 	struct sigaction sigact;
-
-	sigact.sa_handler = SIG_IGN;
-	sigemptyset(&sigact.sa_mask);
-	sigact.sa_flags = SA_NOCLDWAIT;
-	sigact.sa_restorer = NULL;
-
-	result = sigaction(SIGCHLD, &sigact, NULL);
-	if(result<0){
-		perror("sigaction");
-		exit(1);
-	}
 
 	if( argc < 2 ){
 		printf("Usage:%s <service or port>\n",argv[0]);
@@ -222,7 +262,15 @@ int main( int argc, char *argv[] )
 			continue;
 		}
 
-		ev.data.fd = sfd;
+        svr_ed *ed = malloc(sizeof(svr_ed));
+        if(!ed){
+            perror("malloc(sizeof(svr_ed))");
+            close(sfd);
+            continue;
+        }
+        ed->sfd = sfd;
+        ed->endpoint_new = server_endpoint_new;
+        ev.data.ptr = ed;
 		result = epoll_ctl(epfd, EPOLL_CTL_ADD, sfd, &ev);
 		if(result==-1){
 			perror("epoll_ctl");
@@ -232,38 +280,50 @@ int main( int argc, char *argv[] )
 
 		N_l_sockets++;
 	}
-	
+
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if(sfd==-1){
+        perror("socket: AF_UNIX");
+        exit(1);
+    }
+
+    struct sockaddr_un sa_server;
+
+    socklen_t addr_len = sockaddr_un_prepare(&sa_server, SOCKET_PATH);
+    result = bind(sfd, (struct sockaddr*)&sa_server, addr_len);
+    if(result==-1){
+        perror("bind: AF_UNIX");
+        exit(1);
+    }
+
+    result = listen(sfd, LISTEN_BACKLOG);
+    if(result==-1){
+        perror("listen: AF_UNIX");
+        exit(1);
+    }
+
+    svr_ed *ed = malloc(sizeof(svr_ed));
+    if(!ed){
+        perror("malloc(sizeof(svr_ed)): AF_UNIX");
+        exit(1);
+    }
+    ed->sfd = sfd;
+    ed->endpoint_new = unix_endpoint_new;
+    ev.data.ptr = ed;
+    result = epoll_ctl(epfd, EPOLL_CTL_ADD, sfd, &ev);
+    if(result==-1){
+        perror("epoll_ctl: AF_UNIX");
+        exit(1);
+    }
+
+    N_l_sockets++;
+
+    printf("N_l_sockets:%d\n", N_l_sockets);
+
 	revents = malloc(sizeof(struct epoll_event)*N_l_sockets);
 	if(!revents){
 		perror("malloc");
 		printf("Couldn't allocate memory for epoll events.");
-		exit(1);
-	}
-
-
-	int pipefd[2];
-	int r;
-	r = pipe(pipefd);
-	if(r<0){
-		perror("pipe");
-		exit(1);
-	}
-
-	srand48(0);
-
-	struct shm_data *shm_data = mmap(NULL, sizeof(struct shm_data),
-									 PROT_READ | PROT_WRITE,
-									 MAP_SHARED | MAP_ANONYMOUS,
-									 -1, 0);
-	if(shm_data==MAP_FAILED){
-		perror("mmap");
-		exit(1);
-	}
-
-	shm_data->N_children = 0;
-	r = sem_init(&shm_data->sem, 1, 1);
-	if(r<0){
-		perror("sem_init");
 		exit(1);
 	}
 
@@ -277,17 +337,8 @@ int main( int argc, char *argv[] )
 		printf("r:%d\n",r);
 		for(int p=0;p<r;p++){
 			if(revents[p].events&EPOLLIN){
-                endpoint *e = endpoint_new(
-                            revents[p].data.fd,
-                            server_recv_cb, NULL, 0, 1);
-                void *p;
-                int e_terminate = 0;
-                if(endpoint_count()>ENDPOINTS_MAX)
-                    p = packet_status_new(P_ST_CODE_BUSY);
-                else
-                    p = packet_status_new(P_ST_CODE_READY);
-                s_ptr *sp = shared_ptr_new(p);
-                endpoint_send(e, sp);
+                svr_ed *ed = revents[p].data.ptr;
+                ed->endpoint_new(ed->sfd);
 			}
 		}
 	}

@@ -28,6 +28,14 @@ fifo_t *fifo_new(int Nfifo)
         free(f);
         return NULL;
     }
+    r = sem_init(&f->write_sem, 0, Nfifo);
+    if(r==-1){
+        perror("fifo_new: sem_init(write_sem)");
+        sem_destroy(&f->fifo_sem);
+        free(f->data);
+        free(f);
+        return NULL;
+    }
     return f;
 }
 
@@ -37,13 +45,14 @@ void fifo_delete(fifo_t *f)
 {
     f->locked_out = 1;
     fifo_lock(f);
+    while(fifo_read_raw(f)){}
     int r = sem_destroy(&f->fifo_sem);
     if(r==-1){
         perror("fifo_delete: sem_destroy");
     }
-    void *p;
-    while(p=fifo_read_raw(f)){
-        free(p);
+    r = sem_destroy(&f->write_sem);
+    if(r==-1){
+        perror("fifo_deleta: sem_destroy(write_sem)");
     }
     free(f->data);
     free(f);
@@ -51,14 +60,10 @@ void fifo_delete(fifo_t *f)
 
 int fifo_write(fifo_t *f, void *p)
 {
-    printf("fifo_write:\n");
+    //printf("fifo_write:\n");
     if(f->locked_out) return 0;
+    sem_wait(&f->write_sem);
     fifo_lock(f);
-    if(!f->write_avail)
-    {
-        fifo_unlock(f);
-        return 0;
-    }
     f->data[f->write_index] = p;
     f->write_index++;
     f->write_index%=f->Nfifo;
@@ -70,13 +75,14 @@ int fifo_write(fifo_t *f, void *p)
 
 void *fifo_read_raw(fifo_t *f)
 {
-    //printf("fifo_read_raw:\n");
+    //printf("fifo_read_raw: read_avail:%d\n", f->read_avail);
     if(!f->read_avail) return NULL;
     void *p = f->data[f->read_index];
     f->read_index++;
     f->read_index%=f->Nfifo;
     f->read_avail--;
     f->write_avail++;
+    sem_post(&f->write_sem);
     return p;
 }
 

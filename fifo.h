@@ -9,6 +9,7 @@ struct fifo
     int write_index;
     int write_avail;
     sem_t fifo_sem;
+    sem_t write_sem;
     int locked_out;
 };
 

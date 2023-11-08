@@ -69,7 +69,7 @@ enum {
     SEND_OPEN, // interface is available
     SEND_READY, // buffers have been initialized
     SEND_INPROGRESS, // packet transmission is in progress
-    SEND_VERIFY, // packet has been transmitted and wainting for final
+    SEND_VERIFY, // packet has been transmitted and wainting for final event
 	SEND_ERROR
 };
 
@@ -115,15 +115,18 @@ struct endpoint
     char   *send_buf;
     size_t  send_bytes;
     fifo_t *send_fifo;
+    long    send_sent;
 
-    int    recv_state;
-    sem_t  recv_sem;
-    int    recv_locked_out;
-    char  *recv_buf_malloc;
-    char  *recv_buf;
-    size_t recv_bytes;
-    void (*recv_packet_cb)(void *packet, endpoint *e);
-    void  *recv_cb_arg;
+    int     recv_state;
+    sem_t   recv_sem;
+    int     recv_locked_out;
+    char   *recv_buf_malloc;
+    char   *recv_buf;
+    size_t  recv_bytes;
+    void  (*recv_packet_cb)(void *packet, endpoint *e);
+    void   *recv_cb_arg;
+    long    recv_discarded;
+    long    recv_received;
 
     struct epoll_event ev_cfd_r;
     struct epoll_event ev_cfd_w;
@@ -136,6 +139,9 @@ struct endpoint
     SSL_CTX *ssl_ctx;
     SSL     *ssl;
 };
+
+
+
 
 struct endpoint_list_element
 {
@@ -177,5 +183,6 @@ int  endpoint_count(void);
 
 extern ele *el_head;
 void endpoint_list_lock(void);
+int endpoint_list_trylock(void);
 void endpoint_list_unlock(void);
 

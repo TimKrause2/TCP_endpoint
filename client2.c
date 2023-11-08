@@ -170,7 +170,7 @@ int main( int argc, char *argv[] )
         }
 
 
-        void *packet = packet_data_new(data, nbytes);
+        void *packet = packet_data_new(data, nbytes, P_DATA_CODE_RAW_DATA);
         free(data);
         if(!packet){
             printf("client2 main: couldn't get a new data packet.\n");

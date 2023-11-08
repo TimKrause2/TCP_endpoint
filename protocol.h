@@ -8,9 +8,10 @@
 enum {
 	P_STATUS,
 	P_DATA,
+    P_COMMAND,
 };
 
-#define SIZEOF_PACKET_COMMON  12
+#define SIZEOF_PACKET_COMMON  16
 #define SIZEOF_PACKET_CRC_DATA 8
 #define OFFSET_OF_TYPE   0
 #define OFFSET_OF_CODE   2
@@ -34,12 +35,62 @@ enum {
 	P_ST_CODE_CONFIRM
 };
 
+enum {
+    P_CMD_CODE_SERVER_INFO,
+    P_CMD_CODE_ENDPOINT_LIST
+};
+
+enum {
+    P_DATA_CODE_RAW_DATA=0,
+    P_DATA_CODE_SERVER_INFO,
+    P_DATA_CODE_ENDPOINT_INFO
+};
+
 char *packet_status_new(uint16_t code);
+char *packet_command_new(uint16_t code);
 
 #define OFFSET_OF_DATA SIZEOF_PACKET_COMMON
 
-char *packet_data_new(char *data, int nbytes);
-void *packet_data_get_data(char *packet);
+char *packet_data_new(char *data, int nbytes, uint16_t code);
+char *packet_data_get_data(char *packet);
 int   packet_data_get_nbytes(char *packet);
+
+typedef struct endpoint_info endpoint_info;
+typedef struct server_info server_info;
+
+struct endpoint_info
+{
+    struct sockaddr_storage peer_addr;
+    struct timespec         init_ts;
+    long                    send_sent;
+    long                    recv_received;
+    long                    recv_discarded;
+};
+
+char *packet_endpoint_info_new(
+    struct sockaddr_storage *peer_addr,
+    struct timespec *init_ts,
+    long send_sent,
+    long recv_received,
+    long recv_discarded);
+
+struct server_info
+{
+    struct timespec  server_ts;
+    long             N_endpoints;
+};
+
+char *packet_server_info_new(
+        struct timespec *server_ts,
+        long N_endpoints);
+
+
+
+
+
+
+
+
+
 
 #endif

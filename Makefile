@@ -2,11 +2,13 @@ LDFLAGS= -pthread -ggdb
 LDLIBS=-lrt -lssl -lcrypto -lm
 CFLAGS= -pthread -ggdb
 
-all: server2 client2
+all: server2 client2 svrctl
 
-server2:server2.o protocol.o timer.o endpoint.o fifo.o shared_ptr.o
+server2:server2.o protocol.o timer.o endpoint.o fifo.o shared_ptr.o util.o
 
 client2:client2.o protocol.o timer.o endpoint.o fifo.o shared_ptr.o util.o
+
+svrctl:svrctl.o protocol.o timer.o endpoint.o fifo.o shared_ptr.o util.o
 
 server:server.o protocol.o timer.o endpoint.o fifo.o shared_ptr.o
 
@@ -31,3 +33,5 @@ fifo.o:fifo.c
 shared_ptr.o:shared_ptr.c
 
 util.o:util.c
+
+svrctl.o:svrctl.c
